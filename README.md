@@ -2,10 +2,10 @@
 n_queens using openmp and cuda to accelerate.
 # Usage
 * sh compile.sh
-* n_queens 16 5
+* ./n_queens 16 5
 # Run time(ms)
-| N | CPU | Openmp | CUDA |
-|---|-----|--------|------|
+| N | CPU | Openmp | 4090 |    Count|
+|---|-----|--------|------|---------|
 |  13 |  23 |   5 | 126 |     73712 |
 |  14 | 137 |   4 | 122 |    365596 |
 |  15 | 766 |   18| 133 |   2279184 |
