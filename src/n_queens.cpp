@@ -1,0 +1,103 @@
+#include "n_queens.h"
+
+#include <stdlib.h>
+#include <omp.h>
+
+float time_diff_ms(struct timeval &start, struct timeval &end) {
+    return (end.tv_sec - start.tv_sec) * 1000.0 + (end.tv_usec - start.tv_usec) / 1000.0;
+}
+
+void n_queens(int N, int cur, int left, int right, long long &sum) {
+    int last = (1 << N) - 1;
+    if (cur == last) {
+        sum++;
+        return;
+    }
+
+    int valid_pos = last & (~(cur | left | right));
+    while (valid_pos) {
+        int p = valid_pos & (-valid_pos);
+        valid_pos -= p;
+        n_queens(N, cur | p, (left | p) << 1, (right | p) >> 1, sum);
+    }
+}
+
+void partial_n_queens(int N, int cur, int left, int right, vector<int> &tot, int cur_level, int level) {
+    int last = (1 << N) - 1;
+    if (cur_level == 0) {
+        last = (1 << N / 2) - 1;
+    }
+    int valid_pos = last & (~(cur | left | right));
+    while (valid_pos) {
+        int p = valid_pos & (-valid_pos);
+        valid_pos -= p;
+        if (cur_level == level - 1) {
+            tot.push_back(cur | p);
+            tot.push_back((left | p) << 1);
+            tot.push_back((right | p) >> 1);
+            continue;
+        }
+        partial_n_queens(N, cur | p, (left | p) << 1, (right | p) >> 1, tot, cur_level + 1, level);
+    }
+}
+
+void partial_n_queens_for_odd(int N, int cur, int left, int right, vector<int> &tot, int cur_level, int level) {
+    int last = (1 << N) - 1;
+    if (cur_level == 0) {
+        last = (1 << N / 2);
+    }
+
+    int valid_pos = last & (~(cur | left | right));
+    while (valid_pos) {
+        int p = valid_pos & (-valid_pos);
+        valid_pos -= p;
+        if (cur_level == level - 1) {
+            tot.push_back(cur | p);
+            tot.push_back((left | p) << 1);
+            tot.push_back((right | p) >> 1);
+            continue;
+        }
+        partial_n_queens_for_odd(N, cur | p, (left | p) << 1, (right | p) >> 1, tot, cur_level + 1, level);
+    }
+}
+
+void random_shuffle(int* data, int len) {
+    for(int i = 0;i<len;i++) {
+        int pos = rand()%len;
+        swap(data[i*3], data[pos*3]);
+        swap(data[i*3 + 1], data[pos*3 + 1]);
+        swap(data[i*3 + 2], data[pos*3 + 2]);
+    }
+}
+
+long long parallel_n_queens(int N, int level) {
+    long long sum = 0;
+    vector<int> tot;
+
+    partial_n_queens(N, 0, 0, 0, tot, 0, level);
+
+    int cnt = tot.size() / 3;
+
+    if (N & 0x1) {
+        partial_n_queens_for_odd(N, 0, 0, 0, tot, 0, level);
+    }
+
+    int new_cnt = tot.size() / 3;
+    vector<long long> partial_sum(new_cnt);
+
+    omp_set_num_threads(32);
+#pragma omp parallel for
+    for (int i = 0; i < new_cnt; i++) {
+        n_queens(N, tot[3 * i], tot[3 * i + 1], tot[3 * i + 2], partial_sum[i]);
+    }
+
+    for (int i = 0; i < cnt; i++) {
+        sum += partial_sum[i] * 2;
+    }
+
+    for (int i = cnt; i < new_cnt; i++) {
+        sum += partial_sum[i];
+    }
+
+    return sum;
+}
