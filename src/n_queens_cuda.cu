@@ -22,45 +22,32 @@ __device__ void n_queens_device(int N, int cur, int left, int right, long long* 
     }
 }
 
-// 自定义的栈结构
-template <typename T, int MAX_SIZE>
-struct DeviceStack {
-    T data[MAX_SIZE];
-    int top;
-
-    __device__ DeviceStack() : top(-1) {}
-
-    __device__ bool empty() const { return top == -1; }
-
-    __device__ void push(const T& value) { data[++top] = value; }
-
-    __device__ T pop() { return data[top--]; }
-};
-
 __device__ long long n_queens_device_iterative(int N, int cur, int left, int right) {
-    struct State {
-        int cur;
-        int left;
-        int right;
-    };
-    DeviceStack<State, 64> stack;  // 假设最大深度为1024
-    stack.push({cur, left, right});
+    int stack[192];
+    int top = 0;
+    stack[top++] = cur;
+    stack[top++] = left;
+    stack[top++] = right;
     long long sum = 0;
     int last = (1 << N) - 1;
 
-    while (!stack.empty()) {
-        State state = stack.pop();
+    while (top != 0) {
+        right = stack[--top];
+        left = stack[--top];
+        cur = stack[--top];
 
-        if (state.cur == last) {
+        if (cur == last) {
             sum++;
             continue;
         }
 
-        int valid_pos = last & (~(state.cur | state.left | state.right));
+        int valid_pos = last & (~(cur | left | right));
         while (valid_pos) {
             int p = valid_pos & (-valid_pos);
             valid_pos -= p;
-            stack.push({state.cur | p, (state.left | p) << 1, (state.right | p) >> 1});
+            stack[top++] = cur | p;
+            stack[top++] = (left | p) << 1;
+            stack[top++] = (right | p) >> 1;
         }
     }
 
