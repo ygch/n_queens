@@ -7,7 +7,7 @@
 
 inline int get_block_size(int size, int block_size) { return (size + block_size - 1) / block_size; }
 
-__device__ void n_queens_device(int N, int cur, int left, int right, long long* sum) {
+__device__ void n_queens_device(int N, int cur, int left, int right, long long *sum) {
     int last = (1 << N) - 1;
     if (cur == last) {
         (*sum)++;
@@ -43,7 +43,7 @@ __device__ long long n_queens_device_iterative(int N, int cur, int left, int rig
 
         int valid_pos = last & (~(cur | left | right));
         while (valid_pos) {
-            int p = valid_pos & (-valid_pos);
+            int p = valid_pos & (~valid_pos + 1);
             valid_pos -= p;
             stack[top++] = cur | p;
             stack[top++] = (left | p) << 1;
@@ -54,7 +54,7 @@ __device__ long long n_queens_device_iterative(int N, int cur, int left, int rig
     return sum;
 }
 
-__global__ void n_queens(int N, int* tot, long long* partial_sum, int cnt) {
+__global__ void n_queens(int N, int *tot, long long *partial_sum, int cnt) {
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
 
     if (tid < cnt) {
@@ -76,12 +76,12 @@ long long cuda_n_queens(int N, int level) {
 
     int new_cnt = tot.size() / 3;
     vector<long long> partial_sum(new_cnt);
-    
-    //random_shuffle(tot.data(), cnt);
-    //random_shuffle(tot.data() + cnt * 3, new_cnt - cnt);
+
+    // random_shuffle(tot.data(), cnt);
+    // random_shuffle(tot.data() + cnt * 3, new_cnt - cnt);
 
     int *cuda_tot;
-    long long* cuda_partial_sum;
+    long long *cuda_partial_sum;
     CU_SAFE_CALL(cudaMalloc(&cuda_tot, sizeof(int) * new_cnt * 3));
     CU_SAFE_CALL(cudaMalloc(&cuda_partial_sum, sizeof(long long) * new_cnt));
 

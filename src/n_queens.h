@@ -14,7 +14,7 @@ void partial_n_queens(int N, int cur, int left, int right, vector<int> &tot, int
 
 void partial_n_queens_for_odd(int N, int cur, int left, int right, vector<int> &tot, int cur_level, int level);
 
-void random_shuffle(int* data, int len);
+void random_shuffle(int *data, int len);
 
 long long parallel_n_queens(int N, int level);
 

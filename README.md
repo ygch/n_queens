@@ -15,7 +15,7 @@ n_queens using openmp and cuda to accelerate.
 |  19 |  x  |47900 |15848 |4968057848 | 
 |  20 |  x  |360000|119140|39029188884|
 
-# Cuda runtimes of unfolding different layers
+# Cuda runtimes(ms) of unfolding different layers
 | N | 3 | 4 | 5 | 6 | 7 | 8 | 9 |
 |:-:|--:|--:|--:|--:|--:|--:|--:|
 |17 |1822|498|431|423|433|563|1025|

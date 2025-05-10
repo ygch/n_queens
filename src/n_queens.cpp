@@ -1,7 +1,7 @@
 #include "n_queens.h"
 
-#include <stdlib.h>
 #include <omp.h>
+#include <stdlib.h>
 
 float time_diff_ms(struct timeval &start, struct timeval &end) {
     return (end.tv_sec - start.tv_sec) * 1000.0 + (end.tv_usec - start.tv_usec) / 1000.0;
@@ -61,12 +61,12 @@ void partial_n_queens_for_odd(int N, int cur, int left, int right, vector<int> &
     }
 }
 
-void random_shuffle(int* data, int len) {
-    for(int i = 0;i<len;i++) {
-        int pos = rand()%len;
-        swap(data[i*3], data[pos*3]);
-        swap(data[i*3 + 1], data[pos*3 + 1]);
-        swap(data[i*3 + 2], data[pos*3 + 2]);
+void random_shuffle(int *data, int len) {
+    for (int i = 0; i < len; i++) {
+        int pos = rand() % len;
+        swap(data[i * 3], data[pos * 3]);
+        swap(data[i * 3 + 1], data[pos * 3 + 1]);
+        swap(data[i * 3 + 2], data[pos * 3 + 2]);
     }
 }
 
