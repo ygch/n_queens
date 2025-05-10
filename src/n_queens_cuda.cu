@@ -1,7 +1,5 @@
 #include <cuda_runtime.h>
 
-#include <stack>
-
 #include "macro.h"
 #include "n_queens.h"
 
@@ -23,13 +21,13 @@ __device__ void n_queens_device(int N, int cur, int left, int right, long long *
 }
 
 __device__ long long n_queens_device_iterative(int N, int cur, int left, int right) {
+    long long sum = 0;
+    int last = (1 << N) - 1;
     int stack[192];
     int top = 0;
     stack[top++] = cur;
     stack[top++] = left;
     stack[top++] = right;
-    long long sum = 0;
-    int last = (1 << N) - 1;
 
     while (top != 0) {
         right = stack[--top];
@@ -43,7 +41,7 @@ __device__ long long n_queens_device_iterative(int N, int cur, int left, int rig
 
         int valid_pos = last & (~(cur | left | right));
         while (valid_pos) {
-            int p = valid_pos & (~valid_pos + 1);
+            int p = valid_pos & (-valid_pos);
             valid_pos -= p;
             stack[top++] = cur | p;
             stack[top++] = (left | p) << 1;
