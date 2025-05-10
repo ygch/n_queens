@@ -64,19 +64,16 @@ long long cuda_n_queens(int N, int level) {
     long long sum = 0;
     vector<int> tot;
 
-    partial_n_queens(N, 0, 0, 0, tot, 0, level);
+    partial_n_queens(N, 0, 0, 0, tot, level);
 
     int cnt = tot.size() / 3;
 
     if (N & 0x1) {
-        partial_n_queens_for_odd(N, 0, 0, 0, tot, 0, level);
+        partial_n_queens_for_odd(N, 0, 0, 0, tot, level);
     }
 
     int new_cnt = tot.size() / 3;
     vector<long long> partial_sum(new_cnt);
-
-    // random_shuffle(tot.data(), cnt);
-    // random_shuffle(tot.data() + cnt * 3, new_cnt - cnt);
 
     int *cuda_tot;
     long long *cuda_partial_sum;
@@ -84,7 +81,7 @@ long long cuda_n_queens(int N, int level) {
     CU_SAFE_CALL(cudaMalloc(&cuda_partial_sum, sizeof(long long) * new_cnt));
 
     CU_SAFE_CALL(cudaMemcpy(cuda_tot, tot.data(), sizeof(int) * new_cnt * 3, cudaMemcpyHostToDevice));
-    CU_SAFE_CALL(cudaMemcpy(cuda_partial_sum, partial_sum.data(), sizeof(long long) * new_cnt, cudaMemcpyHostToDevice));
+    CU_SAFE_CALL(cudaMemset(cuda_partial_sum, 0, sizeof(long long) * new_cnt));
 
     dim3 dimBlock(CU1DBLOCK);
     dim3 dimGrid(get_block_size(new_cnt, CU1DBLOCK));
