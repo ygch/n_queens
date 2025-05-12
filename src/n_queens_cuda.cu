@@ -5,58 +5,40 @@
 
 inline int get_block_size(int size, int block_size) { return (size + block_size - 1) / block_size; }
 
-__device__ void n_queens_device(int N, int cur, int left, int right, long long *sum) {
-    int last = (1 << N) - 1;
-    if (cur == last) {
-        (*sum)++;
-        return;
-    }
-
-    int valid_pos = last & (~(cur | left | right));
-    while (valid_pos) {
-        int p = valid_pos & (-valid_pos);
-        valid_pos -= p;
-        n_queens_device(N, cur | p, (left | p) << 1, (right | p) >> 1, sum);
-    }
-}
-
-__device__ long long n_queens_device_iterative(int N, int cur, int left, int right) {
-    long long sum = 0;
-    int last = (1 << N) - 1;
-    int stack[192];
-    int top = 0;
-    stack[top++] = cur;
-    stack[top++] = left;
-    stack[top++] = right;
-
-    while (top != 0) {
-        right = stack[--top];
-        left = stack[--top];
-        cur = stack[--top];
-
-        if (cur == last) {
-            sum++;
-            continue;
-        }
-
-        int valid_pos = last & (~(cur | left | right));
-        while (valid_pos) {
-            int p = valid_pos & (-valid_pos);
-            valid_pos -= p;
-            stack[top++] = cur | p;
-            stack[top++] = (left | p) << 1;
-            stack[top++] = (right | p) >> 1;
-        }
-    }
-
-    return sum;
-}
-
 __global__ void n_queens(int N, int *tot, long long *partial_sum, int cnt) {
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
 
     if (tid < cnt) {
-        partial_sum[tid] = n_queens_device_iterative(N, tot[tid * 3], tot[tid * 3 + 1], tot[tid * 3 + 2]);
+        long long sum = 0;
+        int last = (1 << N) - 1;
+        int stack[192];
+        int top = 0;
+
+        stack[top++] = tot[tid * 3];
+        stack[top++] = tot[tid * 3 + 1];
+        stack[top++] = tot[tid * 3 + 2];
+
+        while (top != 0) {
+            int right = stack[--top];
+            int left = stack[--top];
+            int cur = stack[--top];
+
+            if (cur == last) {
+                sum++;
+                continue;
+            }
+
+            int valid_pos = last & (~(cur | left | right));
+            while (valid_pos) {
+                int p = valid_pos & (-valid_pos);
+                valid_pos -= p;
+                stack[top++] = cur | p;
+                stack[top++] = (left | p) << 1;
+                stack[top++] = (right | p) >> 1;
+            }
+        }
+
+        partial_sum[tid] = sum;
     }
 }
 
