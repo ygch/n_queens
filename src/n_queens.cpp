@@ -22,6 +22,37 @@ void n_queens(int N, int cur, int left, int right, long long &sum) {
     }
 }
 
+// a little slower
+void n_queens_iterative(int N, int cur, int left, int right, long long &sum) {
+    int last = (1 << N) - 1;
+    int stack[192];
+    int top = 0;
+
+    stack[top++]=cur;
+    stack[top++]=left;
+    stack[top++]=right;
+
+    while(top != 0) {
+        right = stack[--top];
+        left = stack[--top];
+        cur = stack[--top];
+
+        if(cur == last) {
+            sum++;
+            continue;
+        }
+
+        int valid_pos = last & (~(cur | left | right));
+        while (valid_pos) {
+            int p = valid_pos & (-valid_pos);
+            valid_pos -= p;
+            stack[top++]=(cur | p);
+            stack[top++]=((left | p) << 1);
+            stack[top++]=((right | p) >> 1);
+        }
+    }
+}
+
 void partial_n_queens(int N, int cur, int left, int right, vector<int> &tot, int level) {
     int last = (1 << N) - 1;
     if (cur == 0) {
@@ -45,6 +76,8 @@ void partial_n_queens_for_odd(int N, int cur, int left, int right, vector<int> &
     int last = (1 << N) - 1;
     if (cur == 0) {
         last = (1 << N / 2);
+    } else if((cur&(cur - 1)) == 0) {
+        last = (1 << (N - 2) / 2) - 1;
     }
 
     int valid_pos = last & (~(cur | left | right));
@@ -67,27 +100,21 @@ long long parallel_n_queens(int N, int level) {
 
     partial_n_queens(N, 0, 0, 0, tot, level);
 
-    int cnt = tot.size() / 3;
-
     if (N & 0x1) {
         partial_n_queens_for_odd(N, 0, 0, 0, tot, level);
     }
 
-    int new_cnt = tot.size() / 3;
-    vector<long long> partial_sum(new_cnt);
+    int cnt = tot.size() / 3;
+    vector<long long> partial_sum(cnt);
 
     omp_set_num_threads(32);
 #pragma omp parallel for
-    for (int i = 0; i < new_cnt; i++) {
+    for (int i = 0; i < cnt; i++) {
         n_queens(N, tot[3 * i], tot[3 * i + 1], tot[3 * i + 2], partial_sum[i]);
     }
 
     for (int i = 0; i < cnt; i++) {
         sum += partial_sum[i] * 2;
-    }
-
-    for (int i = cnt; i < new_cnt; i++) {
-        sum += partial_sum[i];
     }
 
     return sum;

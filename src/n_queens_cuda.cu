@@ -48,43 +48,37 @@ long long cuda_n_queens(int N, int level) {
 
     partial_n_queens(N, 0, 0, 0, tot, level);
 
-    int cnt = tot.size() / 3;
-
     if (N & 0x1) {
         partial_n_queens_for_odd(N, 0, 0, 0, tot, level);
     }
 
-    int new_cnt = tot.size() / 3;
-    vector<long long> partial_sum(new_cnt);
+    int cnt = tot.size() / 3;
+    vector<long long> partial_sum(cnt);
 
     int *cuda_tot;
     long long *cuda_partial_sum;
-    CU_SAFE_CALL(cudaMalloc(&cuda_tot, sizeof(int) * new_cnt * 3));
-    CU_SAFE_CALL(cudaMalloc(&cuda_partial_sum, sizeof(long long) * new_cnt));
+    CU_SAFE_CALL(cudaMalloc(&cuda_tot, sizeof(int) * cnt * 3));
+    CU_SAFE_CALL(cudaMalloc(&cuda_partial_sum, sizeof(long long) * cnt));
 
-    CU_SAFE_CALL(cudaMemcpy(cuda_tot, tot.data(), sizeof(int) * new_cnt * 3, cudaMemcpyHostToDevice));
-    CU_SAFE_CALL(cudaMemset(cuda_partial_sum, 0, sizeof(long long) * new_cnt));
+    CU_SAFE_CALL(cudaMemcpy(cuda_tot, tot.data(), sizeof(int) * cnt * 3, cudaMemcpyHostToDevice));
+    CU_SAFE_CALL(cudaMemset(cuda_partial_sum, 0, sizeof(long long) * cnt));
 
     dim3 dimBlock(CU1DBLOCK);
-    dim3 dimGrid(get_block_size(new_cnt, CU1DBLOCK));
+    dim3 dimGrid(get_block_size(cnt, CU1DBLOCK));
 
-    printf("total size %d, block size %d, grid size %d\n", new_cnt, CU1DBLOCK, get_block_size(new_cnt, CU1DBLOCK));
+    printf("total size %d, block size %d, grid size %d\n", cnt, CU1DBLOCK, get_block_size(cnt, CU1DBLOCK));
 
-    n_queens<<<dimGrid, dimBlock>>>(N, cuda_tot, cuda_partial_sum, new_cnt);
+    n_queens<<<dimGrid, dimBlock>>>(N, cuda_tot, cuda_partial_sum, cnt);
 
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
         printf("kernel error: %s\n", cudaGetErrorString(err));
     }
 
-    CU_SAFE_CALL(cudaMemcpy(partial_sum.data(), cuda_partial_sum, sizeof(long long) * new_cnt, cudaMemcpyDeviceToHost));
+    CU_SAFE_CALL(cudaMemcpy(partial_sum.data(), cuda_partial_sum, sizeof(long long) * cnt, cudaMemcpyDeviceToHost));
 
     for (int i = 0; i < cnt; i++) {
         sum += partial_sum[i] * 2;
-    }
-
-    for (int i = cnt; i < new_cnt; i++) {
-        sum += partial_sum[i];
     }
 
     CU_SAFE_CALL(cudaFree(cuda_tot));
