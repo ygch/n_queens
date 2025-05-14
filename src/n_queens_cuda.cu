@@ -3,39 +3,66 @@
 #include "macro.h"
 #include "n_queens.h"
 
-inline int get_block_size(int size, int block_size) { return (size + block_size - 1) / block_size; }
+inline int get_block_size(long long size, int block_size) { return (size + block_size - 1) / block_size; }
 
-__global__ void n_queens(int N, int *tot, long long *partial_sum, int cnt) {
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+__global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt) {
+    long long tid = blockIdx.x * blockDim.x + threadIdx.x;
 
     if (tid < cnt) {
-        long long sum = 0;
         int last = (1 << N) - 1;
-        int stack[192];
+        long long sum = 0;
+        __shared__ int stack[48 * 256];
+        int idx = threadIdx.x / 32 * 32 * 48 + threadIdx.x % 32;
         int top = 0;
 
-        stack[top++] = tot[tid * 3];
-        stack[top++] = tot[tid * 3 + 1];
-        stack[top++] = tot[tid * 3 + 2];
+        int cur = tot[tid * 3];
+        int left = tot[tid * 3 + 1];
+        int right = tot[tid * 3 + 2];
+        int valid_pos = last & (~(cur | left | right));
+        int p;
+
+        if(valid_pos == 0) return;
+
+        stack[idx + top] = cur;
+        stack[idx + top + 32] = left;
+        stack[idx + top + 64] = right;
+        stack[idx + top + 96] = valid_pos;
+        top += 128;
 
         while (top != 0) {
-            int right = stack[--top];
-            int left = stack[--top];
-            int cur = stack[--top];
+            valid_pos = stack[idx + top - 32];
+            right = stack[idx + top - 64];
+            left = stack[idx + top - 96];
+            cur = stack[idx + top - 128];
 
-            if (cur == last) {
+            p = valid_pos & (-valid_pos);
+            valid_pos -= p;
+
+            if(valid_pos == 0) {
+                top -= 128;
+            } else {
+                stack[idx + top - 32] = valid_pos;
+            }
+
+            cur = cur | p;
+            if(cur == last) {
                 sum++;
                 continue;
             }
 
-            int valid_pos = last & (~(cur | left | right));
-            while (valid_pos) {
-                int p = valid_pos & (-valid_pos);
-                valid_pos -= p;
-                stack[top++] = cur | p;
-                stack[top++] = (left | p) << 1;
-                stack[top++] = (right | p) >> 1;
+            left = (left | p) << 1;
+            right = (right | p) >> 1;
+            valid_pos = last & (~(cur | left | right));
+
+            if(valid_pos == 0) {
+                continue;
             }
+
+            stack[idx + top] = cur;
+            stack[idx + top + 32] = left;
+            stack[idx + top + 64] = right;
+            stack[idx + top + 96] = valid_pos;
+            top += 128;
         }
 
         partial_sum[tid] = sum;
@@ -52,8 +79,10 @@ long long cuda_n_queens(int N, int level) {
         partial_n_queens_for_odd(N, 0, 0, 0, tot, level);
     }
 
-    int cnt = tot.size() / 3;
+    long long cnt = tot.size() / 3;
     vector<long long> partial_sum(cnt);
+
+    cudaDeviceSetCacheConfig(cudaFuncCachePreferShared);
 
     int *cuda_tot;
     long long *cuda_partial_sum;
@@ -66,7 +95,7 @@ long long cuda_n_queens(int N, int level) {
     dim3 dimBlock(CU1DBLOCK);
     dim3 dimGrid(get_block_size(cnt, CU1DBLOCK));
 
-    printf("total size %d, block size %d, grid size %d\n", cnt, CU1DBLOCK, get_block_size(cnt, CU1DBLOCK));
+    printf("total size %lld, block size %d, grid size %d\n", cnt, CU1DBLOCK, get_block_size(cnt, CU1DBLOCK));
 
     n_queens<<<dimGrid, dimBlock>>>(N, cuda_tot, cuda_partial_sum, cnt);
 
@@ -77,7 +106,7 @@ long long cuda_n_queens(int N, int level) {
 
     CU_SAFE_CALL(cudaMemcpy(partial_sum.data(), cuda_partial_sum, sizeof(long long) * cnt, cudaMemcpyDeviceToHost));
 
-    for (int i = 0; i < cnt; i++) {
+    for (long long i = 0; i < cnt; i++) {
         sum += partial_sum[i] * 2;
     }
 
