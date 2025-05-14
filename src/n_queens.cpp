@@ -25,31 +25,50 @@ void n_queens(int N, int cur, int left, int right, long long &sum) {
 // a little slower
 void n_queens_iterative(int N, int cur, int left, int right, long long &sum) {
     int last = (1 << N) - 1;
-    int stack[192];
+    int stack[64];
     int top = 0;
+    int valid_pos = last & (~(cur | left | right));
 
-    stack[top++]=cur;
-    stack[top++]=left;
-    stack[top++]=right;
+    if(valid_pos == 0) return;
+
+    stack[top++] = cur;
+    stack[top++] = left;
+    stack[top++] = right;
+    stack[top++] = valid_pos;
 
     while(top != 0) {
-        right = stack[--top];
-        left = stack[--top];
-        cur = stack[--top];
+        valid_pos = stack[top - 1];
+        right = stack[top - 2];
+        left = stack[top - 3];
+        cur = stack[top - 4];
 
+        int p = valid_pos & (-valid_pos);
+        valid_pos -= p;
+
+        if(valid_pos == 0) {
+            top -= 4;
+        } else {
+            stack[top - 1] = valid_pos;
+        }
+
+        cur = cur | p;
         if(cur == last) {
             sum++;
             continue;
         }
 
-        int valid_pos = last & (~(cur | left | right));
-        while (valid_pos) {
-            int p = valid_pos & (-valid_pos);
-            valid_pos -= p;
-            stack[top++]=(cur | p);
-            stack[top++]=((left | p) << 1);
-            stack[top++]=((right | p) >> 1);
+        left = (left | p) << 1;
+        right = (right | p) >> 1;
+        valid_pos = last & (~(cur | left | right));
+
+        if(valid_pos == 0) {
+            continue;
         }
+
+        stack[top++] = cur;
+        stack[top++] = left;
+        stack[top++] = right;
+        stack[top++] = valid_pos;
     }
 }
 
