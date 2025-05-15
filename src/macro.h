@@ -23,7 +23,7 @@
 #define TRUNCATE(a) ((a) > 255.0 ? 255 : ((a) < 0 ? 0 : (rint((a)))))
 
 // The size of a CUDA 1-d block, e.g. for vector operations..
-#define CU1DBLOCK 256
+#define CU1DBLOCK 192
 
 // The size of edge of CUDA square block, e.g. for matrix operations.
 #define CU2DBLOCK 16
