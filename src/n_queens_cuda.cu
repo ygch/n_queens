@@ -12,14 +12,13 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
         int last = (1 << N) - 1;
         long long sum = 0;
         __shared__ int stack[48 * 256];
-        int idx = threadIdx.x / 32 * 32 * 48 + threadIdx.x % 32;
+        int idx = threadIdx.x / 32 * 32 * 96 + threadIdx.x % 32;
         int top = 0;
 
         int cur = tot[tid * 3];
         int left = tot[tid * 3 + 1];
         int right = tot[tid * 3 + 2];
         int valid_pos = last & (~(cur | left | right));
-        int p;
 
         if(valid_pos == 0) return;
 
@@ -35,7 +34,7 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
             left = stack[idx + top - 96];
             cur = stack[idx + top - 128];
 
-            p = valid_pos & (-valid_pos);
+            int p = valid_pos & (-valid_pos);
             valid_pos -= p;
 
             if(valid_pos == 0) {
