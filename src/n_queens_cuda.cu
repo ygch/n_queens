@@ -5,21 +5,20 @@
 
 inline int get_block_size(long long size, int block_size) { return (size + block_size - 1) / block_size; }
 
-__global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt) {
+__global__ void n_queens_global(int N, int *tot, long long *partial_sum, long long cnt) {
     long long tid = blockIdx.x * blockDim.x + threadIdx.x;
 
     if (tid < cnt) {
         int last = (1 << N) - 1;
         long long sum = 0;
-        __shared__ int stack[48 * 256];
-        int idx = threadIdx.x / 32 * 32 * 48 + threadIdx.x % 32;
+        extern __shared__ int stack[];
+        int idx = threadIdx.x / 32 * 32 * 96 + threadIdx.x % 32;
         int top = 0;
 
         int cur = tot[tid * 3];
         int left = tot[tid * 3 + 1];
         int right = tot[tid * 3 + 2];
         int valid_pos = last & (~(cur | left | right));
-        int p;
 
         if(valid_pos == 0) return;
 
@@ -35,7 +34,7 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
             left = stack[idx + top - 96];
             cur = stack[idx + top - 128];
 
-            p = valid_pos & (-valid_pos);
+            int p = valid_pos & (-valid_pos);
             valid_pos -= p;
 
             if(valid_pos == 0) {
@@ -81,8 +80,8 @@ long long cuda_n_queens(int N, int level) {
 
     long long cnt = tot.size() / 3;
     vector<long long> partial_sum(cnt);
-
-    cudaDeviceSetCacheConfig(cudaFuncCachePreferShared);
+    
+    printf("total size %lld, block size %d, grid size %d\n", cnt, CU1DBLOCK, get_block_size(cnt, CU1DBLOCK));
 
     int *cuda_tot;
     long long *cuda_partial_sum;
@@ -93,11 +92,12 @@ long long cuda_n_queens(int N, int level) {
     CU_SAFE_CALL(cudaMemset(cuda_partial_sum, 0, sizeof(long long) * cnt));
 
     dim3 dimBlock(CU1DBLOCK);
-    dim3 dimGrid(get_block_size(cnt, CU1DBLOCK));
+    dim3 dimGrid(get_block_size(cnt, CU1DBLOCK));    
+    
+    int shared_memory_size = 96 * 1024;
+    cudaFuncSetAttribute((void*)n_queens_global, cudaFuncAttributeMaxDynamicSharedMemorySize, shared_memory_size);
 
-    printf("total size %lld, block size %d, grid size %d\n", cnt, CU1DBLOCK, get_block_size(cnt, CU1DBLOCK));
-
-    n_queens<<<dimGrid, dimBlock>>>(N, cuda_tot, cuda_partial_sum, cnt);
+    n_queens_global<<<dimGrid, dimBlock, shared_memory_size>>>(N, cuda_tot, cuda_partial_sum, cnt);
 
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
