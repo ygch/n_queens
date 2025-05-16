@@ -39,10 +39,6 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
             val >>= 21;
             right = val;
 
-            if(tid == 0) {
-                printf("top %d, [%d, %lld, %lld, %lld]\n", top, valid_pos, cur, left, right);
-            }
-
             int p = valid_pos & (-valid_pos);
             valid_pos -= p;
 
