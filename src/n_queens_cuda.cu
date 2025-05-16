@@ -10,41 +10,50 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
 
     if (tid < cnt) {
         int last = (1 << N) - 1;
+        int mask = (1 << 21) - 1;
         long long sum = 0;
-        __shared__ int stack[48 * 256];
-        int idx = threadIdx.x / 32 * 32 * 96 + threadIdx.x % 32;
+        __shared__ long long stack_clr[21 * 192];
+        __shared__ int stack_valid_pos[22 * 192];
+        int idx = threadIdx.x / 32 * 32 * 21 + threadIdx.x % 32;
+
         int top = idx;
 
-        int cur = tot[tid * 3];
-        int left = tot[tid * 3 + 1];
-        int right = tot[tid * 3 + 2];
+        long long cur = tot[tid * 3];
+        long long left = tot[tid * 3 + 1];
+        long long right = tot[tid * 3 + 2];
         int valid_pos = last & (~(cur | left | right));
 
-        if(valid_pos == 0) return;
+        if (valid_pos == 0) return;
 
-        stack[top] = cur;
-        stack[top + 32] = left;
-        stack[top + 64] = right;
-        stack[top + 96] = valid_pos;
-        top += 128;
+        stack_clr[top] = cur | (left << 21) | (right << 42);
+        stack_valid_pos[top] = valid_pos;
+        top += 32;
 
         while (top != idx) {
-            valid_pos = stack[top - 32];
-            right = stack[top - 64];
-            left = stack[top - 96];
-            cur = stack[top - 128];
+            valid_pos = stack_valid_pos[top - 32];
+
+            long long val = stack_clr[top - 32];
+            cur = val & mask;
+            val >>= 21;
+            left = val & mask;
+            val >>= 21;
+            right = val;
+
+            if(tid == 0) {
+                printf("top %d, [%d, %lld, %lld, %lld]\n", top, valid_pos, cur, left, right);
+            }
 
             int p = valid_pos & (-valid_pos);
             valid_pos -= p;
 
-            if(valid_pos == 0) {
-                top -= 128;
+            if (valid_pos == 0) {
+                top -= 32;
             } else {
-                stack[top - 32] = valid_pos;
+                stack_valid_pos[top - 32] = valid_pos;
             }
 
             cur = cur | p;
-            if(cur == last) {
+            if (cur == last) {
                 sum++;
                 continue;
             }
@@ -53,15 +62,13 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
             right = (right | p) >> 1;
             valid_pos = last & (~(cur | left | right));
 
-            if(valid_pos == 0) {
+            if (valid_pos == 0) {
                 continue;
             }
 
-            stack[top] = cur;
-            stack[top + 32] = left;
-            stack[top + 64] = right;
-            stack[top + 96] = valid_pos;
-            top += 128;
+            stack_clr[top] = cur | (left << 21) | (right << 42);
+            stack_valid_pos[top] = valid_pos;
+            top += 32;
         }
 
         partial_sum[tid] = sum;
