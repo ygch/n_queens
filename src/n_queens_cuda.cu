@@ -12,7 +12,7 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
         int last = (1 << N) - 1;
         long long sum = 0;
         __shared__ int stack[48 * 256];
-        int idx = threadIdx.x / 32 * 32 * 96 + threadIdx.x % 32;
+        int idx = threadIdx.x / 32 * 32 * 76 + threadIdx.x % 32;
         int top = idx;
 
         int cur = tot[tid * 3];
