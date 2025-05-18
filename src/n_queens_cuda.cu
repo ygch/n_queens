@@ -13,7 +13,7 @@ __global__ void n_queens_global(int N, int *tot, long long *partial_sum, long lo
         long long sum = 0;
         extern __shared__ int stack[];
         int idx = threadIdx.x / 32 * 32 * 96 + threadIdx.x % 32;
-        int top = 0;
+        int top = idx;
 
         int cur = tot[tid * 3];
         int left = tot[tid * 3 + 1];
@@ -22,17 +22,17 @@ __global__ void n_queens_global(int N, int *tot, long long *partial_sum, long lo
 
         if(valid_pos == 0) return;
 
-        stack[idx + top] = cur;
-        stack[idx + top + 32] = left;
-        stack[idx + top + 64] = right;
-        stack[idx + top + 96] = valid_pos;
+        stack[top] = cur;
+        stack[top + 32] = left;
+        stack[top + 64] = right;
+        stack[top + 96] = valid_pos;
         top += 128;
 
-        while (top != 0) {
-            valid_pos = stack[idx + top - 32];
-            right = stack[idx + top - 64];
-            left = stack[idx + top - 96];
-            cur = stack[idx + top - 128];
+        while (top != idx) {
+            valid_pos = stack[top - 32];
+            right = stack[top - 64];
+            left = stack[top - 96];
+            cur = stack[top - 128];
 
             int p = valid_pos & (-valid_pos);
             valid_pos -= p;
@@ -40,7 +40,7 @@ __global__ void n_queens_global(int N, int *tot, long long *partial_sum, long lo
             if(valid_pos == 0) {
                 top -= 128;
             } else {
-                stack[idx + top - 32] = valid_pos;
+                stack[top - 32] = valid_pos;
             }
 
             cur = cur | p;
@@ -57,10 +57,10 @@ __global__ void n_queens_global(int N, int *tot, long long *partial_sum, long lo
                 continue;
             }
 
-            stack[idx + top] = cur;
-            stack[idx + top + 32] = left;
-            stack[idx + top + 64] = right;
-            stack[idx + top + 96] = valid_pos;
+            stack[top] = cur;
+            stack[top + 32] = left;
+            stack[top + 64] = right;
+            stack[top + 96] = valid_pos;
             top += 128;
         }
 
