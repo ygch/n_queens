@@ -1,4 +1,5 @@
 #include <cuda_runtime.h>
+#include <omp.h>
 
 #include "macro.h"
 #include "n_queens.h"
@@ -20,7 +21,7 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
         int right = tot[tid * 3 + 2];
         int valid_pos = last & (~(cur | left | right));
 
-        if(valid_pos == 0) return;
+        if (valid_pos == 0) return;
 
         stack[top] = cur;
         stack[top + 32] = left;
@@ -37,14 +38,14 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
             int p = valid_pos & (-valid_pos);
             valid_pos -= p;
 
-            if(valid_pos == 0) {
+            if (valid_pos == 0) {
                 top -= 128;
             } else {
                 stack[top - 32] = valid_pos;
             }
 
             cur = cur | p;
-            if(cur == last) {
+            if (cur == last) {
                 sum++;
                 continue;
             }
@@ -53,7 +54,7 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
             right = (right | p) >> 1;
             valid_pos = last & (~(cur | left | right));
 
-            if(valid_pos == 0) {
+            if (valid_pos == 0) {
                 continue;
             }
 
@@ -69,9 +70,11 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
 }
 
 long long cuda_n_queens(int N, int level) {
+    struct timeval start, end;
     long long sum = 0;
     vector<int> tot;
 
+    gettimeofday(&start, NULL);
     partial_n_queens(N, 0, 0, 0, tot, level);
 
     if (N & 0x1) {
@@ -80,37 +83,55 @@ long long cuda_n_queens(int N, int level) {
 
     long long cnt = tot.size() / 3;
     vector<long long> partial_sum(cnt);
+    gettimeofday(&end, NULL);
 
-    cudaDeviceSetCacheConfig(cudaFuncCachePreferShared);
+    printf("Use %.2fms to generate %lld subproblems!\n", time_diff_ms(start, end), cnt);
 
-    int *cuda_tot;
-    long long *cuda_partial_sum;
-    CU_SAFE_CALL(cudaMalloc(&cuda_tot, sizeof(int) * cnt * 3));
-    CU_SAFE_CALL(cudaMalloc(&cuda_partial_sum, sizeof(long long) * cnt));
-
-    CU_SAFE_CALL(cudaMemcpy(cuda_tot, tot.data(), sizeof(int) * cnt * 3, cudaMemcpyHostToDevice));
-    CU_SAFE_CALL(cudaMemset(cuda_partial_sum, 0, sizeof(long long) * cnt));
-
-    dim3 dimBlock(CU1DBLOCK);
-    dim3 dimGrid(get_block_size(cnt, CU1DBLOCK));
-
-    printf("total size %lld, block size %d, grid size %d\n", cnt, CU1DBLOCK, get_block_size(cnt, CU1DBLOCK));
-
-    n_queens<<<dimGrid, dimBlock>>>(N, cuda_tot, cuda_partial_sum, cnt);
-
-    cudaError_t err = cudaGetLastError();
-    if (err != cudaSuccess) {
-        printf("kernel error: %s\n", cudaGetErrorString(err));
+    int gpu_num = 0;
+    cudaGetDeviceCount(&gpu_num);
+    if (gpu_num == 0) {
+        printf("Failed to find any gpu!\n");
+        return -1;
     }
 
-    CU_SAFE_CALL(cudaMemcpy(partial_sum.data(), cuda_partial_sum, sizeof(long long) * cnt, cudaMemcpyDeviceToHost));
+#pragma omp parallel num_threads(gpu_num)
+    {
+        int idx = omp_get_thread_num();
+        long long chunk_size = cnt / gpu_num;
+        long long start = idx * chunk_size;
+        long long end = (idx == gpu_num - 1) ? cnt : start + chunk_size;
+        long long cnt = end - start;
+
+        printf("gpu [%d] process %lld subproblems, block size [%d], grid size [%d].\n", idx, cnt, CU1DBLOCK,
+               get_block_size(cnt, CU1DBLOCK));
+
+        int *cuda_tot;
+        CU_SAFE_CALL(cudaMalloc(&cuda_tot, sizeof(int) * cnt * 3));
+        CU_SAFE_CALL(cudaMemcpy(cuda_tot, tot.data() + start * 3, sizeof(int) * cnt * 3, cudaMemcpyHostToDevice));
+
+        long long *cuda_partial_sum;
+        CU_SAFE_CALL(cudaMalloc(&cuda_partial_sum, sizeof(long long) * cnt));
+        CU_SAFE_CALL(cudaMemset(cuda_partial_sum, 0, sizeof(long long) * cnt));
+
+        dim3 dimBlock(CU1DBLOCK);
+        dim3 dimGrid(get_block_size(cnt, CU1DBLOCK));
+
+        n_queens<<<dimGrid, dimBlock>>>(N, cuda_tot, cuda_partial_sum, cnt);
+
+        cudaError_t err = cudaGetLastError();
+        if (err != cudaSuccess) {
+            printf("kernel error: %s\n", cudaGetErrorString(err));
+        }
+
+        CU_SAFE_CALL(cudaMemcpy(partial_sum.data() + start, cuda_partial_sum, sizeof(long long) * cnt, cudaMemcpyDeviceToHost));
+
+        CU_SAFE_CALL(cudaFree(cuda_tot));
+        CU_SAFE_CALL(cudaFree(cuda_partial_sum));
+    }
 
     for (long long i = 0; i < cnt; i++) {
         sum += partial_sum[i] * 2;
     }
-
-    CU_SAFE_CALL(cudaFree(cuda_tot));
-    CU_SAFE_CALL(cudaFree(cuda_partial_sum));
 
     return sum;
 }

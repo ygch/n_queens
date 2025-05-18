@@ -29,14 +29,14 @@ void n_queens_iterative(int N, int cur, int left, int right, long long &sum) {
     int top = 0;
     int valid_pos = last & (~(cur | left | right));
 
-    if(valid_pos == 0) return;
+    if (valid_pos == 0) return;
 
     stack[top++] = cur;
     stack[top++] = left;
     stack[top++] = right;
     stack[top++] = valid_pos;
 
-    while(top != 0) {
+    while (top != 0) {
         valid_pos = stack[top - 1];
         right = stack[top - 2];
         left = stack[top - 3];
@@ -45,14 +45,14 @@ void n_queens_iterative(int N, int cur, int left, int right, long long &sum) {
         int p = valid_pos & (-valid_pos);
         valid_pos -= p;
 
-        if(valid_pos == 0) {
+        if (valid_pos == 0) {
             top -= 4;
         } else {
             stack[top - 1] = valid_pos;
         }
 
         cur = cur | p;
-        if(cur == last) {
+        if (cur == last) {
             sum++;
             continue;
         }
@@ -61,7 +61,7 @@ void n_queens_iterative(int N, int cur, int left, int right, long long &sum) {
         right = (right | p) >> 1;
         valid_pos = last & (~(cur | left | right));
 
-        if(valid_pos == 0) {
+        if (valid_pos == 0) {
             continue;
         }
 
@@ -95,7 +95,7 @@ void partial_n_queens_for_odd(int N, int cur, int left, int right, vector<int> &
     int last = (1 << N) - 1;
     if (cur == 0) {
         last = (1 << N / 2);
-    } else if((cur&(cur - 1)) == 0) {
+    } else if ((cur & (cur - 1)) == 0) {
         last = (1 << (N - 2) / 2) - 1;
     }
 
