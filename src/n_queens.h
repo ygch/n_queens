@@ -1,12 +1,8 @@
 #pragma once
 
-#include <sys/time.h>
-
 #include <vector>
 
 using namespace std;
-
-float time_diff_ms(struct timeval &start, struct timeval &end);
 
 void n_queens(int N, int cur, int left, int right, long long &sum);
 

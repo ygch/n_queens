@@ -3,6 +3,7 @@
 
 #include "macro.h"
 #include "n_queens.h"
+#include "utils.h"
 
 inline int get_block_size(long long size, int block_size) { return (size + block_size - 1) / block_size; }
 
@@ -85,7 +86,7 @@ long long cuda_n_queens(int N, int level) {
     vector<long long> partial_sum(cnt);
     gettimeofday(&end, NULL);
 
-    printf("Use %.2fms to generate %lld subproblems!\n", time_diff_ms(start, end), cnt);
+    print_with_time("Use %.2fms to generate %lld subproblems!\n", time_diff_ms(start, end), cnt);
 
     int gpu_num = 0;
     cudaGetDeviceCount(&gpu_num);
@@ -97,13 +98,14 @@ long long cuda_n_queens(int N, int level) {
 #pragma omp parallel num_threads(gpu_num)
     {
         int idx = omp_get_thread_num();
+        CU_SAFE_CALL(cudaSetDevice(idx));
+
         long long chunk_size = cnt / gpu_num;
         long long start = idx * chunk_size;
         long long end = (idx == gpu_num - 1) ? cnt : start + chunk_size;
         long long cnt = end - start;
 
-        printf("gpu [%d] process %lld subproblems, block size [%d], grid size [%d].\n", idx, cnt, CU1DBLOCK,
-               get_block_size(cnt, CU1DBLOCK));
+        print_with_time("gpu [%d] start job, with %lld subproblems.\n", idx, cnt);
 
         int *cuda_tot;
         CU_SAFE_CALL(cudaMalloc(&cuda_tot, sizeof(int) * cnt * 3));
@@ -118,7 +120,7 @@ long long cuda_n_queens(int N, int level) {
 
         n_queens<<<dimGrid, dimBlock>>>(N, cuda_tot, cuda_partial_sum, cnt);
 
-        cudaError_t err = cudaGetLastError();
+        cudaError_t err = cudaDeviceSynchronize();
         if (err != cudaSuccess) {
             printf("kernel error: %s\n", cudaGetErrorString(err));
         }
@@ -127,6 +129,7 @@ long long cuda_n_queens(int N, int level) {
 
         CU_SAFE_CALL(cudaFree(cuda_tot));
         CU_SAFE_CALL(cudaFree(cuda_partial_sum));
+        print_with_time("gpu [%d] finish job.\n", idx);
     }
 
     for (long long i = 0; i < cnt; i++) {

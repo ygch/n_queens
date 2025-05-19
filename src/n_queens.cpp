@@ -3,9 +3,7 @@
 #include <omp.h>
 #include <stdlib.h>
 
-float time_diff_ms(struct timeval &start, struct timeval &end) {
-    return (end.tv_sec - start.tv_sec) * 1000.0 + (end.tv_usec - start.tv_usec) / 1000.0;
-}
+#include "utils.h"
 
 void n_queens(int N, int cur, int left, int right, long long &sum) {
     int last = (1 << N) - 1;
