@@ -75,6 +75,7 @@ long long cuda_n_queens(int N, int level) {
     long long sum = 0;
     vector<int> tot;
 
+    // 1. get total subproblems.
     gettimeofday(&start, NULL);
     partial_n_queens(N, 0, 0, 0, tot, level);
 
@@ -95,21 +96,40 @@ long long cuda_n_queens(int N, int level) {
         return -1;
     }
 
+    // 2. divide total subproblems to different trunks
+    vector<long long> new_cnt(gpu_num), start_pos(gpu_num);
+    long long total = 0;
+    if (gpu_num == 8) {
+        float ratio[8] = {0.17, 0.15, 0.14, 0.13, 0.13, 0.09, 0.1, 0.09};
+        for (int i = 0; i < gpu_num - 1; i++) {
+            new_cnt[i] = cnt * ratio[i];
+            start_pos[i] = total;
+            total += new_cnt[i];
+        }
+    } else {
+        long long partial_cnt = cnt / gpu_num;
+        for (int i = 0; i < gpu_num - 1; i++) {
+            new_cnt[i] = partial_cnt;
+            start_pos[i] = total;
+            total += partial_cnt;
+        }
+    }
+    new_cnt[gpu_num - 1] = cnt - total;
+    start_pos[gpu_num - 1] = total;
+
+    // 3. use different gpu to process each trunk
 #pragma omp parallel num_threads(gpu_num)
     {
         int idx = omp_get_thread_num();
         CU_SAFE_CALL(cudaSetDevice(idx));
 
-        long long chunk_size = cnt / gpu_num;
-        long long start = idx * chunk_size;
-        long long end = (idx == gpu_num - 1) ? cnt : start + chunk_size;
-        long long cnt = end - start;
+        long long cnt = new_cnt[idx];
 
         print_with_time("gpu [%d] start job, with %lld subproblems.\n", idx, cnt);
 
         int *cuda_tot;
         CU_SAFE_CALL(cudaMalloc(&cuda_tot, sizeof(int) * cnt * 3));
-        CU_SAFE_CALL(cudaMemcpy(cuda_tot, tot.data() + start * 3, sizeof(int) * cnt * 3, cudaMemcpyHostToDevice));
+        CU_SAFE_CALL(cudaMemcpy(cuda_tot, tot.data() + start_pos[idx] * 3, sizeof(int) * cnt * 3, cudaMemcpyHostToDevice));
 
         long long *cuda_partial_sum;
         CU_SAFE_CALL(cudaMalloc(&cuda_partial_sum, sizeof(long long) * cnt));
@@ -125,7 +145,8 @@ long long cuda_n_queens(int N, int level) {
             printf("kernel error: %s\n", cudaGetErrorString(err));
         }
 
-        CU_SAFE_CALL(cudaMemcpy(partial_sum.data() + start, cuda_partial_sum, sizeof(long long) * cnt, cudaMemcpyDeviceToHost));
+        CU_SAFE_CALL(
+            cudaMemcpy(partial_sum.data() + start_pos[idx], cuda_partial_sum, sizeof(long long) * cnt, cudaMemcpyDeviceToHost));
 
         CU_SAFE_CALL(cudaFree(cuda_tot));
         CU_SAFE_CALL(cudaFree(cuda_partial_sum));
