@@ -56,7 +56,7 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
 
             p = cur ^ last;
             if((p & (p - 1)) == 0) {
-                sum += __popc(valid_pos);
+                sum++; // only has one valid position
                 continue;
             }
 
