@@ -50,16 +50,17 @@ void n_queens_iterative(int N, int cur, int left, int right, long long &sum) {
         }
 
         cur = cur | p;
-        if (cur == last) {
-            sum++;
-            continue;
-        }
-
         left = (left | p) << 1;
         right = (right | p) >> 1;
         valid_pos = last & (~(cur | left | right));
 
         if (valid_pos == 0) {
+            continue;
+        }
+
+        p = cur ^ last;
+        if((p & (p - 1)) == 0) {
+            sum += __builtin_popcount(valid_pos);
             continue;
         }
 
