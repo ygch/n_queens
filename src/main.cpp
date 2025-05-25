@@ -30,13 +30,13 @@ int main(int argc, char *argv[]) {
     gettimeofday(&end, NULL);
     printf("%d queens result %lld, calc time: [%.2fms]\n", N, sum,
            time_diff_ms(start, end));
-    */
 
     gettimeofday(&start, NULL);
     sum = parallel_n_queens(N, level);
     gettimeofday(&end, NULL);
     printf("parallel %d queens result %lld, calc time: [%.2fms]\n", N, sum,
            time_diff_ms(start, end));
+    */
 
     gettimeofday(&start, NULL);
     sum = cuda_n_queens(N, level);

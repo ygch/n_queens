@@ -44,16 +44,17 @@ __global__ void n_queens_global(int N, int *tot, long long *partial_sum, long lo
             }
 
             cur = cur | p;
-            if(cur == last) {
-                sum++;
-                continue;
-            }
-
             left = (left | p) << 1;
             right = (right | p) >> 1;
             valid_pos = last & (~(cur | left | right));
 
             if(valid_pos == 0) {
+                continue;
+            }
+
+            p = cur ^ last;
+            if((p & (p - 1)) == 0) {
+                sum++;
                 continue;
             }
 
