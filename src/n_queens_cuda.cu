@@ -1,5 +1,7 @@
 #include <cuda_runtime.h>
+#include <unistd.h>
 #include <omp.h>
+#include <thread>
 
 #include "macro.h"
 #include "n_queens.h"
@@ -7,7 +9,7 @@
 
 inline int get_block_size(long long size, int block_size) { return (size + block_size - 1) / block_size; }
 
-__global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt) {
+__global__ void n_queens(int N, int *tot, long long *partial_sum, unsigned long long *finish_cnt, long long cnt, int gpu_idx) {
     const long long tid = blockIdx.x * blockDim.x + threadIdx.x;
 
     if (tid < cnt) {
@@ -68,6 +70,11 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
         }
 
         partial_sum[tid] = sum;
+        atomicAdd(finish_cnt, 1);
+
+        if(finish_cnt[0] % 10000 ==0 && tid % 31 == 0) {
+            printf("gpu [%d] finish %.2f subproblems.\n", gpu_idx, finish_cnt[0] * 100.0 / cnt);
+        }
     }
 }
 
@@ -136,18 +143,21 @@ long long cuda_n_queens(int N, int level) {
         CU_SAFE_CALL(cudaMalloc(&cuda_partial_sum, sizeof(long long) * cnt));
         CU_SAFE_CALL(cudaMemset(cuda_partial_sum, 0, sizeof(long long) * cnt));
 
+        unsigned long long *finish_cnt;
+        CU_SAFE_CALL(cudaMalloc(&finish_cnt, sizeof(long long)));
+        CU_SAFE_CALL(cudaMemset(finish_cnt, 0, sizeof(long long)));
+
         dim3 dimBlock(CU1DBLOCK);
         dim3 dimGrid(get_block_size(cnt, CU1DBLOCK));
 
-        n_queens<<<dimGrid, dimBlock>>>(N, cuda_tot, cuda_partial_sum, cnt);
+        n_queens<<<dimGrid, dimBlock>>>(N, cuda_tot, cuda_partial_sum, finish_cnt, cnt, idx);
 
         cudaError_t err = cudaDeviceSynchronize();
         if (err != cudaSuccess) {
             printf("kernel error: %s\n", cudaGetErrorString(err));
         }
 
-        CU_SAFE_CALL(
-            cudaMemcpy(partial_sum.data() + start_pos[idx], cuda_partial_sum, sizeof(long long) * cnt, cudaMemcpyDeviceToHost));
+        CU_SAFE_CALL(cudaMemcpy(partial_sum.data() + start_pos[idx], cuda_partial_sum, sizeof(long long) * cnt, cudaMemcpyDeviceToHost));
 
         CU_SAFE_CALL(cudaFree(cuda_tot));
         CU_SAFE_CALL(cudaFree(cuda_partial_sum));
