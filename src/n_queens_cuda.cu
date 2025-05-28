@@ -14,8 +14,8 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
         int last = (1 << N) - 1;
         long long sum = 0;
         __shared__ int stack[48 * 256];
-        const int idx = threadIdx.x / 32 * 32 * 76 + threadIdx.x % 32;
-        int top = idx;
+        const int bottom = threadIdx.x / 32 * 32 * 76 + threadIdx.x % 32;
+        int top = bottom;
 
         int cur = tot[tid * 3];
         int left = tot[tid * 3 + 1];
@@ -30,7 +30,7 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
         stack[top + 96] = valid_pos;
         top += 128;
 
-        while (top != idx) {
+        while (top != bottom) {
             valid_pos = stack[top - 32];
             right = stack[top - 64];
             left = stack[top - 96];
@@ -146,8 +146,7 @@ long long cuda_n_queens(int N, int level) {
             printf("kernel error: %s\n", cudaGetErrorString(err));
         }
 
-        CU_SAFE_CALL(
-            cudaMemcpy(partial_sum.data() + start_pos[idx], cuda_partial_sum, sizeof(long long) * cnt, cudaMemcpyDeviceToHost));
+        CU_SAFE_CALL(cudaMemcpy(partial_sum.data() + start_pos[idx], cuda_partial_sum, sizeof(long long) * cnt, cudaMemcpyDeviceToHost));
 
         CU_SAFE_CALL(cudaFree(cuda_tot));
         CU_SAFE_CALL(cudaFree(cuda_partial_sum));
