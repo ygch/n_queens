@@ -12,6 +12,8 @@ void partial_n_queens(int N, int cur, int left, int right, vector<int> &tot, int
 
 void partial_n_queens_for_odd(int N, int cur, int left, int right, vector<int> &tot, int level);
 
+long long serial_n_queens(int N, int level);
+
 long long parallel_n_queens(int N, int level);
 
 long long cuda_n_queens(int N, int level);

@@ -112,6 +112,30 @@ void partial_n_queens_for_odd(int N, int cur, int left, int right, vector<int> &
     }
 }
 
+long long serial_n_queens(int N, int level) {
+    long long sum = 0;
+    vector<int> tot;
+
+    partial_n_queens(N, 0, 0, 0, tot, level);
+
+    if (N & 0x1) {
+        partial_n_queens_for_odd(N, 0, 0, 0, tot, level);
+    }
+
+    int cnt = tot.size() / 3;
+    vector<long long> partial_sum(cnt);
+
+    for (int i = 0; i < cnt; i++) {
+        n_queens(N, tot[3 * i], tot[3 * i + 1], tot[3 * i + 2], partial_sum[i]);
+    }
+
+    for (int i = 0; i < cnt; i++) {
+        sum += partial_sum[i] * 2;
+    }
+
+    return sum;
+}
+
 long long parallel_n_queens(int N, int level) {
     long long sum = 0;
     vector<int> tot;

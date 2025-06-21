@@ -27,9 +27,9 @@ int main(int argc, char *argv[]) {
 
     /*
     gettimeofday(&start, NULL);
-    n_queens(N, 0, 0, 0, sum);
+    sum = serial_n_queens(N, level);
     gettimeofday(&end, NULL);
-    printf("%d queens result %lld, calc time: [%.2fms]\n", N, sum,
+    printf("serial %d queens result %lld, calc time: [%.2fms]\n", N, sum,
            time_diff_ms(start, end));
 
     gettimeofday(&start, NULL);
@@ -38,7 +38,6 @@ int main(int argc, char *argv[]) {
     printf("parallel %d queens result %lld, calc time: [%.2fms]\n", N, sum,
            time_diff_ms(start, end));
     */
-
     print_with_time("===============================================================\n");
     gettimeofday(&start, NULL);
     sum = cuda_n_queens(N, level);
