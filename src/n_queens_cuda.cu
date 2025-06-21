@@ -107,6 +107,20 @@ long long cuda_n_queens(int N, int level) {
             start_pos[i] = total;
             total += new_cnt[i];
         }
+    } else if (gpu_num == 4) {
+        float ratio[4] = {0.34, 0.25, 0.21, 0.2};
+        for (int i = 0; i < gpu_num - 1; i++) {
+            new_cnt[i] = cnt * ratio[i];
+            start_pos[i] = total;
+            total += new_cnt[i];
+        }
+    } else if (gpu_num == 2) {
+        float ratio[2] = {0.59, 0.41};
+        for (int i = 0; i < gpu_num - 1; i++) {
+            new_cnt[i] = cnt * ratio[i];
+            start_pos[i] = total;
+            total += new_cnt[i];
+        }
     } else {
         long long partial_cnt = cnt / gpu_num;
         for (int i = 0; i < gpu_num - 1; i++) {
