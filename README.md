@@ -18,15 +18,13 @@ n_queens using openmp and cuda to accelerate.
 | 22 |  x   |  x   |412338|668218|311139|2691008701644|
 1. CPU is AMD 9950x3D;
 2. Openmp uses 32 threads on AMD 9950x3D; 
-3. single 4090 with pre-placing first 6 rows;
-4. single A100 with pre-placing first 6 rows;
-3. single 5090 with pre-placing first 6 rows;
+3. single 4090/A100/5090 with pre-placing first 6 rows;
 
 # Cuda runtimes(s) for larger N
 | N | 20 | 21 | 22 | 23 | 24 | 25 |
 |:-:|---:|---:|---:|---:|---:|---:|
-|Time|1.86|7.92|59.72|550.5|5048|48085|
-* 8 RTX 4090 with pre-placing first 6 rows;
+|8 4090|1.86|7.92|59.72|550.5|5048|48085|
+|8 A100|3.35|12.72|94.5|831.0|..|..|
 
 # Cuda runtime for 26-queens
 4.1 days
