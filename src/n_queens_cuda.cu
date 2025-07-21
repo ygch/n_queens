@@ -14,7 +14,7 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
         int last = (1 << N) - 1;
         long long sum = 0;
         __shared__ int stack[48 * 256];
-        const int bottom = threadIdx.x / 32 * 32 * 76 + threadIdx.x % 32;
+        const int bottom = threadIdx.x / 32 * 32 * STACKSIZE + threadIdx.x % 32;
         int top = bottom;
 
         int cur = tot[tid * 3];
@@ -71,17 +71,17 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
     }
 }
 
-long long cuda_n_queens(int N, int level) {
+long long cuda_n_queens(int N, int rows) {
     struct timeval start, end;
     long long sum = 0;
     vector<int> tot;
 
     // 1. get total subproblems.
     gettimeofday(&start, NULL);
-    partial_n_queens(N, 0, 0, 0, tot, level);
+    partial_n_queens(N, 0, 0, 0, tot, rows);
 
     if (N & 0x1) {
-        partial_n_queens_for_odd(N, 0, 0, 0, tot, level);
+        partial_n_queens_for_odd(N, 0, 0, 0, tot, rows);
     }
 
     long long cnt = tot.size() / 3;

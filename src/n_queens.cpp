@@ -71,7 +71,7 @@ void n_queens_iterative(int N, int cur, int left, int right, long long &sum) {
     }
 }
 
-void partial_n_queens(int N, int cur, int left, int right, vector<int> &tot, int level) {
+void partial_n_queens(int N, int cur, int left, int right, vector<int> &tot, int rows) {
     int last = (1 << N) - 1;
     if (cur == 0) {
         last = (1 << N / 2) - 1;
@@ -80,17 +80,17 @@ void partial_n_queens(int N, int cur, int left, int right, vector<int> &tot, int
     while (valid_pos) {
         int p = valid_pos & (-valid_pos);
         valid_pos -= p;
-        if (level == 1) {
+        if (rows == 1) {
             tot.push_back(cur | p);
             tot.push_back((left | p) << 1);
             tot.push_back((right | p) >> 1);
             continue;
         }
-        partial_n_queens(N, cur | p, (left | p) << 1, (right | p) >> 1, tot, level - 1);
+        partial_n_queens(N, cur | p, (left | p) << 1, (right | p) >> 1, tot, rows - 1);
     }
 }
 
-void partial_n_queens_for_odd(int N, int cur, int left, int right, vector<int> &tot, int level) {
+void partial_n_queens_for_odd(int N, int cur, int left, int right, vector<int> &tot, int rows) {
     int last = (1 << N) - 1;
     if (cur == 0) {
         last = (1 << N / 2);
@@ -102,24 +102,24 @@ void partial_n_queens_for_odd(int N, int cur, int left, int right, vector<int> &
     while (valid_pos) {
         int p = valid_pos & (-valid_pos);
         valid_pos -= p;
-        if (level == 1) {
+        if (rows == 1) {
             tot.push_back(cur | p);
             tot.push_back((left | p) << 1);
             tot.push_back((right | p) >> 1);
             continue;
         }
-        partial_n_queens_for_odd(N, cur | p, (left | p) << 1, (right | p) >> 1, tot, level - 1);
+        partial_n_queens_for_odd(N, cur | p, (left | p) << 1, (right | p) >> 1, tot, rows - 1);
     }
 }
 
-long long serial_n_queens(int N, int level) {
+long long serial_n_queens(int N, int rows) {
     long long sum = 0;
     vector<int> tot;
 
-    partial_n_queens(N, 0, 0, 0, tot, level);
+    partial_n_queens(N, 0, 0, 0, tot, rows);
 
     if (N & 0x1) {
-        partial_n_queens_for_odd(N, 0, 0, 0, tot, level);
+        partial_n_queens_for_odd(N, 0, 0, 0, tot, rows);
     }
 
     int cnt = tot.size() / 3;
@@ -136,14 +136,14 @@ long long serial_n_queens(int N, int level) {
     return sum;
 }
 
-long long parallel_n_queens(int N, int level) {
+long long parallel_n_queens(int N, int rows) {
     long long sum = 0;
     vector<int> tot;
 
-    partial_n_queens(N, 0, 0, 0, tot, level);
+    partial_n_queens(N, 0, 0, 0, tot, rows);
 
     if (N & 0x1) {
-        partial_n_queens_for_odd(N, 0, 0, 0, tot, level);
+        partial_n_queens_for_odd(N, 0, 0, 0, tot, rows);
     }
 
     int cnt = tot.size() / 3;
