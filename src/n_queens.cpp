@@ -60,7 +60,7 @@ void n_queens_iterative(int N, int cur, int left, int right, long long &sum) {
 
         p = cur ^ last;
         if((p & (p - 1)) == 0) {
-            sum += __builtin_popcount(valid_pos);
+            sum++;
             continue;
         }
 
