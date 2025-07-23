@@ -25,8 +25,8 @@ With one single GPU card, for solving N <= 22, best parameters are: pre-placing 
 # Cuda runtimes(s) for larger N
 |  N   | 20 | 21  | 22  | 23  | 24 | 25  |
 |:----:|---:|----:|----:|----:|---:|----:|
-|8 4090|1.86|7.92 |59.72|550.5|5048|48085|
-|8 A100|3.35|12.72|94.50|831.0|7996|74893|
+|8 4090|1.83|7.73 |57.59|550.7|5048|48085|
+|8 A100|3.34|12.96|94.50|831.0|7996|74893|
 
 * Pre-placing first 6 rows under configuration2.
 
