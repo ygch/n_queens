@@ -38,12 +38,8 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
 
             int p = valid_pos & (-valid_pos);
             valid_pos -= p;
-
-            if (valid_pos == 0) {
-                top -= 128;
-            } else {
-                stack[top - 32] = valid_pos;
-            }
+            stack[top - 32] = valid_pos;
+            top -= (valid_pos == 0 ? 128 : 0);
 
             cur = cur | p;
             left = (left | p) << 1;
