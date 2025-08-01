@@ -25,13 +25,13 @@
 #ifdef _USE_CONFIG1_
 // The size of a CUDA 1-d block, e.g. for vector operations..
 #define CU1DBLOCK 128
-#define STACKSIZE 96
+#define STACKSIZE 24
 #elif defined _USE_CONFIG2_
 #define CU1DBLOCK 160
-#define STACKSIZE 76
+#define STACKSIZE 19
 #elif defined _USE_CONFIG3_
 #define CU1DBLOCK 192
-#define STACKSIZE 64
+#define STACKSIZE 16
 #endif
 
 // The size of edge of CUDA square block, e.g. for matrix operations.

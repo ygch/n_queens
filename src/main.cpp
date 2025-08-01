@@ -13,8 +13,8 @@ int main(int argc, char *argv[]) {
     }
 
     int rows = atoi(argv[2]);
-    if(STACKSIZE/4 + 1 + rows < N) {
-        printf("This configure cannot process %d-queens with pre-placing %d rows. Pre-placed rows should be >= %d.\n", N, rows, N - STACKSIZE/4 - 1);
+    if(STACKSIZE + 1 + rows < N) {
+        printf("This configure cannot process %d-queens with pre-placing %d rows. Pre-placed rows should be >= %d.\n", N, rows, N - STACKSIZE - 1);
         return -1;
     }
 
@@ -40,6 +40,7 @@ int main(int argc, char *argv[]) {
     printf("parallel %d queens result %lld, calc time: [%.2fms]\n", N, sum,
            time_diff_ms(start, end));
     */
+
     print_with_time("===============================================================\n");
     gettimeofday(&start, NULL);
     sum = cuda_n_queens(N, rows);

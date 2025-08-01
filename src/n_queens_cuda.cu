@@ -13,8 +13,8 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
 
     if (tid < cnt) {
         long long sum = 0;
-        __shared__ int stack[48 * 256];
-        const int bottom = threadIdx.x / 32 * 32 * STACKSIZE + threadIdx.x % 32;
+        __shared__ int4 stack[48 * 64];
+        const int bottom = (threadIdx.x / 32) * 32 * STACKSIZE + threadIdx.x % 32;
         int top = bottom;
 
         int cur = tot[tid * 3];
@@ -24,22 +24,19 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
 
         if (valid_pos == 0) return;
 
-        stack[top] = cur;
-        stack[top + 32] = left;
-        stack[top + 64] = right;
-        stack[top + 96] = valid_pos;
-        top += 128;
+        stack[top] = make_int4(cur, left, right, valid_pos);
+        top += 32;
 
         while (top != bottom) {
-            valid_pos = stack[top - 32];
-            right = stack[top - 64];
-            left = stack[top - 96];
-            cur = stack[top - 128];
+            valid_pos = stack[top - 32].w;
+            right = stack[top - 32].z;
+            left = stack[top - 32].y;
+            cur = stack[top - 32].x;
 
             int p = valid_pos & (-valid_pos);
             valid_pos -= p;
-            stack[top - 32] = valid_pos;
-            top -= (valid_pos == 0 ? 128 : 0);
+            stack[top - 32].w = valid_pos;
+            top -= (valid_pos == 0 ? 32 : 0);
 
             cur = cur | p;
             left = (left | p) << 1;
@@ -51,11 +48,8 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
                 continue;
             }
 
-            stack[top] = cur;
-            stack[top + 32] = left;
-            stack[top + 64] = right;
-            stack[top + 96] = valid_pos;
-            top += 128;
+            stack[top] = make_int4(cur, left, right, valid_pos);
+            top += 32;
         }
 
         partial_sum[tid] = sum;
