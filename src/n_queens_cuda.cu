@@ -9,9 +9,9 @@ inline int get_block_size(long long size, int block_size) { return (size + block
 
 __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt) {
     const long long tid = blockIdx.x * blockDim.x + threadIdx.x;
+    const int last = (1 << N) - 1;
 
     if (tid < cnt) {
-        int last = (1 << N) - 1;
         long long sum = 0;
         __shared__ int stack[48 * 256];
         const int bottom = threadIdx.x / 32 * 32 * STACKSIZE + threadIdx.x % 32;
@@ -20,7 +20,7 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
         int cur = tot[tid * 3];
         int left = tot[tid * 3 + 1];
         int right = tot[tid * 3 + 2];
-        int valid_pos = last & (~(cur | left | right));
+        int valid_pos = last & ~cur & ~left & ~right;
 
         if (valid_pos == 0) return;
 
@@ -44,15 +44,10 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
             cur = cur | p;
             left = (left | p) << 1;
             right = (right | p) >> 1;
-            valid_pos = last & (~(cur | left | right));
+            valid_pos = last & ~cur & ~left & ~right;
 
-            if (valid_pos == 0) {
-                continue;
-            }
-
-            p = cur ^ last;
-            if((p & (p - 1)) == 0) {
-                sum++; // only has one valid position
+            if (valid_pos == 0 || __popc(cur) == N - 1) {
+                sum += __popc(valid_pos);
                 continue;
             }
 
