@@ -11,8 +11,8 @@ __global__ void n_queens_global(int N, int *tot, long long *partial_sum, long lo
     if (tid < cnt) {
         int last = (1 << N) - 1;
         long long sum = 0;
-        extern __shared__ int stack[];
-        int idx = threadIdx.x / 32 * 32 * 96 + threadIdx.x % 32;
+        extern __shared__ int4 stack[];
+        int idx = threadIdx.x / 32 * 32 * 24 + threadIdx.x % 32;
         int top = idx;
 
         int cur = tot[tid * 3];
@@ -22,38 +22,32 @@ __global__ void n_queens_global(int N, int *tot, long long *partial_sum, long lo
 
         if(valid_pos == 0) return;
 
-        stack[top] = cur;
-        stack[top + 32] = left;
-        stack[top + 64] = right;
-        stack[top + 96] = valid_pos;
-        top += 128;
+        stack[top] = make_int4(cur, left, right, valid_pos);
+        top += 32;
 
         while (top != idx) {
-            valid_pos = stack[top - 32];
-            right = stack[top - 64];
-            left = stack[top - 96];
-            cur = stack[top - 128];
+            valid_pos = stack[top - 32].w;
+            right = stack[top - 32].z;
+            left = stack[top - 32].y;
+            cur = stack[top - 32].x;
 
             int p = valid_pos & (-valid_pos);
             valid_pos -= p;
-            stack[top - 32] = valid_pos;
-            top -= (valid_pos == 0 ? 128 : 0);
+            stack[top - 32].w = valid_pos;
+            top -= (valid_pos == 0 ? 32 : 0);
 
             cur = cur | p;
             left = (left | p) << 1;
             right = (right | p) >> 1;
             valid_pos = last & ~(cur | left | right);
 
-            if(valid_pos == 0 || __popc(cur) == N - 1) {
+            if (valid_pos == 0 || __popc(cur) == N - 1) {
                 sum += __popc(valid_pos);
                 continue;
             }
 
-            stack[top] = cur;
-            stack[top + 32] = left;
-            stack[top + 64] = right;
-            stack[top + 96] = valid_pos;
-            top += 128;
+            stack[top] = make_int4(cur, left, right, valid_pos);
+            top += 32;
         }
 
         partial_sum[tid] = sum;
