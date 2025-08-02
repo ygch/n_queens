@@ -18,7 +18,7 @@ __global__ void n_queens_global(int N, int *tot, long long *partial_sum, long lo
         int cur = tot[tid * 3];
         int left = tot[tid * 3 + 1];
         int right = tot[tid * 3 + 2];
-        int valid_pos = last & (~(cur | left | right));
+        int valid_pos = last & ~(cur | left | right);
 
         if(valid_pos == 0) return;
 
@@ -36,25 +36,16 @@ __global__ void n_queens_global(int N, int *tot, long long *partial_sum, long lo
 
             int p = valid_pos & (-valid_pos);
             valid_pos -= p;
-
-            if(valid_pos == 0) {
-                top -= 128;
-            } else {
-                stack[top - 32] = valid_pos;
-            }
+            stack[top - 32] = valid_pos;
+            top -= (valid_pos == 0 ? 128 : 0);
 
             cur = cur | p;
             left = (left | p) << 1;
             right = (right | p) >> 1;
-            valid_pos = last & (~(cur | left | right));
+            valid_pos = last & ~(cur | left | right);
 
-            if(valid_pos == 0) {
-                continue;
-            }
-
-            p = cur ^ last;
-            if((p & (p - 1)) == 0) {
-                sum++;
+            if(valid_pos == 0 || __popc(cur) == N - 1) {
+                sum += __popc(valid_pos);
                 continue;
             }
 
