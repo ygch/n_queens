@@ -33,6 +33,7 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
             left = stack[top - 32].y;
             cur = stack[top - 32].x;
 
+#if 1
             int p = valid_pos & (-valid_pos);
             valid_pos -= p;
             stack[top - 32].w = valid_pos;
@@ -42,7 +43,25 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
             left = (left | p) << 1;
             right = (right | p) >> 1;
             valid_pos = last & ~cur & ~left & ~right;
-
+#else
+            asm(".reg .s32 t;\n\t"
+                ".reg .pred p;\n\t"
+                " neg.s32 t, %3;\n\t"               // t = -valid_pos
+                " and.b32 t, %3, t;\n\t"            // t = valid_pos & (-valid_pos)
+                " sub.s32 %3, %3, t;\n\t"           // valid_pos -= t
+                " mov.s32 %4, %3;\n\t"              // stack[top - 32].w = valid_pos
+                " setp.eq.s32 p, %3, 0;\n\t"        // valid_pos == 0
+                " @p sub.s32 %5, %5, 32;\n\t"       // top -= 32
+                " or.b32 %0, %0, t;\n\t"            // cur = cur | p
+                " or.b32 %1, %1, t;\n\t"            // left = left | p
+                " shl.b32 %1, %1, 1;\n\t"           // left = left << 1
+                " or.b32 %2, %2, t;\n\t"            // right = right | p
+                " shr.b32 %2, %2, 1;\n\t"           // right = right >> 1
+                " lop3.b32 t, %0, %1, %2, 0x1;\n\t" // t = ~cur & ~left & ~right;
+                " and.b32 %3, %6, t;\n\t"           // valid_pos = last & t
+               :"+r"(cur), "+r"(left), "+r"(right), "+r"(valid_pos), "=r"(stack[top - 32].w), "+r"(top) // output
+               : "r"(last)); // input
+#endif
             if (valid_pos == 0 || __popc(cur) == N - 1) {
                 sum += __popc(valid_pos);
                 continue;
