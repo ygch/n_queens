@@ -1,120 +1,145 @@
-[2025-07-21 08:05:42.964] ===============================================================
-[2025-07-21 08:05:43.031] Use 67.11ms to generate 6572646 subproblems!
-[2025-07-21 08:05:45.408] gpu [1] start job, with 1051623 subproblems.
-[2025-07-21 08:05:45.464] gpu [5] start job, with 657264 subproblems.
-[2025-07-21 08:05:45.533] gpu [2] start job, with 854443 subproblems.
-[2025-07-21 08:05:45.541] gpu [4] start job, with 722991 subproblems.
-[2025-07-21 08:05:45.551] gpu [0] start job, with 1183076 subproblems.
-[2025-07-21 08:05:45.568] gpu [3] start job, with 788717 subproblems.
-[2025-07-21 08:05:45.584] gpu [7] start job, with 657268 subproblems.
-[2025-07-21 08:05:45.605] gpu [6] start job, with 657264 subproblems.
-[2025-07-21 08:07:08.534] gpu [0] finish job.
-[2025-07-21 08:07:09.964] gpu [7] finish job.
-[2025-07-21 08:07:10.171] gpu [1] finish job.
-[2025-07-21 08:07:12.538] gpu [3] finish job.
-[2025-07-21 08:07:12.899] gpu [6] finish job.
-[2025-07-21 08:07:13.386] gpu [2] finish job.
-[2025-07-21 08:07:14.996] gpu [5] finish job.
-[2025-07-21 08:07:17.462] gpu [4] finish job.
-[2025-07-21 08:07:17.468] cuda 22 queens result 2691008701644, calc time: [94504.33ms]
-[2025-07-21 08:07:17.468] ===============================================================
-[2025-07-21 08:09:26.369] ===============================================================
-[2025-07-21 08:09:26.456] Use 86.49ms to generate 9454151 subproblems!
-[2025-07-21 08:09:28.093] gpu [5] start job, with 945415 subproblems.
-[2025-07-21 08:09:28.095] gpu [0] start job, with 1701747 subproblems.
-[2025-07-21 08:09:28.140] gpu [6] start job, with 945415 subproblems.
-[2025-07-21 08:09:28.163] gpu [1] start job, with 1512664 subproblems.
-[2025-07-21 08:09:28.196] gpu [2] start job, with 1229039 subproblems.
-[2025-07-21 08:09:28.214] gpu [4] start job, with 1039956 subproblems.
-[2025-07-21 08:09:28.235] gpu [7] start job, with 945417 subproblems.
-[2025-07-21 08:09:28.257] gpu [3] start job, with 1134498 subproblems.
-[2025-07-21 08:21:30.829] gpu [5] finish job.
-[2025-07-21 08:21:41.552] gpu [0] finish job.
-[2025-07-21 08:21:48.633] gpu [2] finish job.
-[2025-07-21 08:22:19.956] gpu [6] finish job.
-[2025-07-21 08:22:26.158] gpu [1] finish job.
-[2025-07-21 08:22:49.442] gpu [7] finish job.
-[2025-07-21 08:22:55.552] gpu [4] finish job.
-[2025-07-21 08:23:17.350] gpu [3] finish job.
-[2025-07-21 08:23:17.362] cuda 23 queens result 24233937684440, calc time: [830993.25ms]
-[2025-07-21 08:23:17.362] ===============================================================
-[2025-07-21 08:33:50.458] ===============================================================
-[2025-07-21 08:33:50.592] Use 134.73ms to generate 13335292 subproblems!
-[2025-07-21 08:33:52.312] gpu [2] start job, with 1733587 subproblems.
-[2025-07-21 08:33:52.325] gpu [7] start job, with 1333532 subproblems.
-[2025-07-21 08:33:52.331] gpu [5] start job, with 1333529 subproblems.
-[2025-07-21 08:33:52.342] gpu [0] start job, with 2400352 subproblems.
-[2025-07-21 08:33:52.366] gpu [6] start job, with 1333529 subproblems.
-[2025-07-21 08:33:52.394] gpu [1] start job, with 2133646 subproblems.
-[2025-07-21 08:33:52.412] gpu [3] start job, with 1600235 subproblems.
-[2025-07-21 08:33:52.434] gpu [4] start job, with 1466882 subproblems.
-[2025-07-21 10:26:25.175] gpu [0] finish job.
-[2025-07-21 10:29:10.800] gpu [2] finish job.
-[2025-07-21 10:30:52.595] gpu [7] finish job.
-[2025-07-21 10:31:31.310] gpu [4] finish job.
-[2025-07-21 10:35:30.103] gpu [5] finish job.
-[2025-07-21 10:37:24.215] gpu [1] finish job.
-[2025-07-21 10:39:18.684] gpu [6] finish job.
-[2025-07-21 10:47:06.700] gpu [3] finish job.
-[2025-07-21 10:47:06.715] cuda 24 queens result 227514171973736, calc time: [7996257.00ms]
-[2025-07-21 10:47:06.715] ===============================================================
-[2025-07-21 10:50:00.353] ===============================================================
-[2025-07-21 10:50:00.519] Use 165.18ms to generate 18480585 subproblems!
-[2025-07-21 10:50:02.247] gpu [3] start job, with 2217670 subproblems.
-[2025-07-21 10:50:02.371] gpu [0] start job, with 3326505 subproblems.
-[2025-07-21 10:50:02.398] gpu [2] start job, with 2402475 subproblems.
-[2025-07-21 10:50:02.406] gpu [5] start job, with 1848058 subproblems.
-[2025-07-21 10:50:02.471] gpu [6] start job, with 1848058 subproblems.
-[2025-07-21 10:50:02.626] gpu [1] start job, with 2956893 subproblems.
-[2025-07-21 10:50:02.632] gpu [4] start job, with 2032864 subproblems.
-[2025-07-21 10:50:02.682] gpu [7] start job, with 1848062 subproblems.
-[2025-07-22 04:47:28.904] gpu [0] finish job.
-[2025-07-22 05:17:23.885] gpu [6] finish job.
-[2025-07-22 06:12:20.538] gpu [5] finish job.
-[2025-07-22 06:23:21.779] gpu [2] finish job.
-[2025-07-22 06:51:15.976] gpu [3] finish job.
-[2025-07-22 07:05:02.891] gpu [7] finish job.
-[2025-07-22 07:17:51.786] gpu [1] finish job.
-[2025-07-22 07:38:13.103] gpu [4] finish job.
-[2025-07-22 07:38:13.139] cuda 25 queens result 2207893435808352, calc time: [74892784.00ms]
-[2025-07-22 07:38:13.139] ===============================================================
-[2025-07-23 02:14:13.794] ===============================================================
-[2025-07-23 02:14:13.827] Use 32.84ms to generate 2967560 subproblems!
-[2025-07-23 02:14:15.462] gpu [3] start job, with 356107 subproblems.
-[2025-07-23 02:14:15.506] gpu [7] start job, with 296759 subproblems.
-[2025-07-23 02:14:15.561] gpu [2] start job, with 385782 subproblems.
-[2025-07-23 02:14:15.590] gpu [5] start job, with 296756 subproblems.
-[2025-07-23 02:14:15.605] gpu [0] start job, with 534160 subproblems.
-[2025-07-23 02:14:15.664] gpu [6] start job, with 296756 subproblems.
-[2025-07-23 02:14:15.688] gpu [4] start job, with 326431 subproblems.
-[2025-07-23 02:14:15.712] gpu [1] start job, with 474809 subproblems.
-[2025-07-23 02:14:16.854] gpu [7] finish job.
-[2025-07-23 02:14:16.937] gpu [3] finish job.
-[2025-07-23 02:14:16.972] gpu [1] finish job.
-[2025-07-23 02:14:16.982] gpu [2] finish job.
-[2025-07-23 02:14:17.001] gpu [0] finish job.
-[2025-07-23 02:14:17.041] gpu [5] finish job.
-[2025-07-23 02:14:17.074] gpu [6] finish job.
-[2025-07-23 02:14:17.127] gpu [4] finish job.
-[2025-07-23 02:14:17.130] cuda 20 queens result 39029188884, calc time: [3335.85ms]
-[2025-07-23 02:14:17.130] ===============================================================
-[2025-07-23 02:15:11.935] ===============================================================
-[2025-07-23 02:15:11.977] Use 42.32ms to generate 4470757 subproblems!
-[2025-07-23 02:15:13.883] gpu [5] start job, with 447075 subproblems.
-[2025-07-23 02:15:13.898] gpu [1] start job, with 715321 subproblems.
-[2025-07-23 02:15:13.908] gpu [4] start job, with 491783 subproblems.
-[2025-07-23 02:15:13.919] gpu [7] start job, with 447079 subproblems.
-[2025-07-23 02:15:13.931] gpu [0] start job, with 804736 subproblems.
-[2025-07-23 02:15:13.939] gpu [3] start job, with 536490 subproblems.
-[2025-07-23 02:15:13.955] gpu [6] start job, with 447075 subproblems.
-[2025-07-23 02:15:13.973] gpu [2] start job, with 581198 subproblems.
-[2025-07-23 02:15:23.684] gpu [1] finish job.
-[2025-07-23 02:15:23.790] gpu [0] finish job.
-[2025-07-23 02:15:24.073] gpu [4] finish job.
-[2025-07-23 02:15:24.322] gpu [5] finish job.
-[2025-07-23 02:15:24.523] gpu [2] finish job.
-[2025-07-23 02:15:24.643] gpu [3] finish job.
-[2025-07-23 02:15:24.706] gpu [6] finish job.
-[2025-07-23 02:15:24.894] gpu [7] finish job.
-[2025-07-23 02:15:24.898] cuda 21 queens result 314666222712, calc time: [12962.46ms]
-[2025-07-23 02:15:24.898] ===============================================================
+[2025-08-02 03:44:56.247] ===============================================================
+[2025-08-02 03:44:56.279] Use 32.28ms to generate 2967560 subproblems!
+[2025-08-02 03:44:59.266] gpu [1] start job, with 474809 subproblems.
+[2025-08-02 03:44:59.386] gpu [2] start job, with 385782 subproblems.
+[2025-08-02 03:44:59.438] gpu [3] start job, with 356107 subproblems.
+[2025-08-02 03:44:59.459] gpu [7] start job, with 296759 subproblems.
+[2025-08-02 03:44:59.476] gpu [4] start job, with 326431 subproblems.
+[2025-08-02 03:44:59.501] gpu [0] start job, with 534160 subproblems.
+[2025-08-02 03:44:59.533] gpu [6] start job, with 296756 subproblems.
+[2025-08-02 03:44:59.563] gpu [5] start job, with 296756 subproblems.
+[2025-08-02 03:45:00.518] gpu [1] finish job.
+[2025-08-02 03:45:00.525] gpu [2] finish job.
+[2025-08-02 03:45:00.540] gpu [0] finish job.
+[2025-08-02 03:45:00.563] gpu [5] finish job.
+[2025-08-02 03:45:00.576] gpu [7] finish job.
+[2025-08-02 03:45:00.581] gpu [6] finish job.
+[2025-08-02 03:45:00.608] gpu [4] finish job.
+[2025-08-02 03:45:00.662] gpu [3] finish job.
+[2025-08-02 03:45:00.665] cuda 20 queens result 39029188884, calc time: [4418.09ms]
+[2025-08-02 03:45:00.665] ===============================================================
+[2025-08-02 03:45:12.565] ===============================================================
+[2025-08-02 03:45:12.598] Use 32.97ms to generate 2967560 subproblems!
+[2025-08-02 03:45:15.506] gpu [0] start job, with 534160 subproblems.
+[2025-08-02 03:45:15.523] gpu [2] start job, with 385782 subproblems.
+[2025-08-02 03:45:15.549] gpu [3] start job, with 356107 subproblems.
+[2025-08-02 03:45:31.724] ===============================================================
+[2025-08-02 03:45:31.758] Use 34.12ms to generate 2967560 subproblems!
+[2025-08-02 03:45:33.445] gpu [7] start job, with 296759 subproblems.
+[2025-08-02 03:45:33.492] gpu [1] start job, with 474809 subproblems.
+[2025-08-02 03:45:33.504] gpu [3] start job, with 356107 subproblems.
+[2025-08-02 03:45:33.527] gpu [2] start job, with 385782 subproblems.
+[2025-08-02 03:45:33.593] gpu [4] start job, with 326431 subproblems.
+[2025-08-02 03:45:33.616] gpu [6] start job, with 296756 subproblems.
+[2025-08-02 03:45:33.635] gpu [5] start job, with 296756 subproblems.
+[2025-08-02 03:45:33.657] gpu [0] start job, with 534160 subproblems.
+[2025-08-02 03:45:34.525] gpu [7] finish job.
+[2025-08-02 03:45:34.608] gpu [1] finish job.
+[2025-08-02 03:45:34.618] gpu [0] finish job.
+[2025-08-02 03:45:34.633] gpu [2] finish job.
+[2025-08-02 03:45:34.668] gpu [5] finish job.
+[2025-08-02 03:45:34.680] gpu [6] finish job.
+[2025-08-02 03:45:34.719] gpu [4] finish job.
+[2025-08-02 03:45:34.761] gpu [3] finish job.
+[2025-08-02 03:45:34.764] cuda 20 queens result 39029188884, calc time: [3039.91ms]
+[2025-08-02 03:45:34.764] ===============================================================
+[2025-08-02 03:46:22.922] ===============================================================
+[2025-08-02 03:46:22.962] Use 40.28ms to generate 4470757 subproblems!
+[2025-08-02 03:46:24.759] gpu [2] start job, with 581198 subproblems.
+[2025-08-02 03:46:24.761] gpu [6] start job, with 447075 subproblems.
+[2025-08-02 03:46:24.766] gpu [0] start job, with 804736 subproblems.
+[2025-08-02 03:46:24.774] gpu [1] start job, with 715321 subproblems.
+[2025-08-02 03:46:24.785] gpu [5] start job, with 447075 subproblems.
+[2025-08-02 03:46:24.798] gpu [3] start job, with 536490 subproblems.
+[2025-08-02 03:46:24.815] gpu [7] start job, with 447079 subproblems.
+[2025-08-02 03:46:24.834] gpu [4] start job, with 491783 subproblems.
+[2025-08-02 03:46:32.149] gpu [1] finish job.
+[2025-08-02 03:46:32.279] gpu [0] finish job.
+[2025-08-02 03:46:32.450] gpu [4] finish job.
+[2025-08-02 03:46:32.733] gpu [5] finish job.
+[2025-08-02 03:46:32.781] gpu [2] finish job.
+[2025-08-02 03:46:32.908] gpu [3] finish job.
+[2025-08-02 03:46:32.924] gpu [6] finish job.
+[2025-08-02 03:46:33.118] gpu [7] finish job.
+[2025-08-02 03:46:33.123] cuda 21 queens result 314666222712, calc time: [10200.96ms]
+[2025-08-02 03:46:33.123] ===============================================================
+[2025-08-02 03:49:08.852] ===============================================================
+[2025-08-02 03:49:08.921] Use 69.08ms to generate 6572646 subproblems!
+[2025-08-02 03:49:10.594] gpu [6] start job, with 657264 subproblems.
+[2025-08-02 03:49:10.627] gpu [4] start job, with 722991 subproblems.
+[2025-08-02 03:49:10.636] gpu [3] start job, with 788717 subproblems.
+[2025-08-02 03:49:10.656] gpu [2] start job, with 854443 subproblems.
+[2025-08-02 03:49:10.691] gpu [1] start job, with 1051623 subproblems.
+[2025-08-02 03:49:10.709] gpu [7] start job, with 657268 subproblems.
+[2025-08-02 03:49:10.726] gpu [0] start job, with 1183076 subproblems.
+[2025-08-02 03:49:10.752] gpu [5] start job, with 657264 subproblems.
+[2025-08-02 03:50:13.266] gpu [0] finish job.
+[2025-08-02 03:50:14.362] gpu [1] finish job.
+[2025-08-02 03:50:14.862] gpu [7] finish job.
+[2025-08-02 03:50:16.147] gpu [3] finish job.
+[2025-08-02 03:50:16.733] gpu [6] finish job.
+[2025-08-02 03:50:17.102] gpu [2] finish job.
+[2025-08-02 03:50:18.574] gpu [5] finish job.
+[2025-08-02 03:50:20.197] gpu [4] finish job.
+[2025-08-02 03:50:20.202] cuda 22 queens result 2691008701644, calc time: [71350.24ms]
+[2025-08-02 03:50:20.202] ===============================================================
+[2025-08-02 03:50:54.506] ===============================================================
+[2025-08-02 03:50:54.591] Use 85.24ms to generate 9454151 subproblems!
+[2025-08-02 03:50:56.020] gpu [4] start job, with 1039956 subproblems.
+[2025-08-02 03:50:56.284] gpu [2] start job, with 1229039 subproblems.
+[2025-08-02 03:50:56.292] gpu [1] start job, with 1512664 subproblems.
+[2025-08-02 03:50:56.314] gpu [7] start job, with 945417 subproblems.
+[2025-08-02 03:50:56.354] gpu [5] start job, with 945415 subproblems.
+[2025-08-02 03:50:56.356] gpu [3] start job, with 1134498 subproblems.
+[2025-08-02 03:50:56.405] gpu [6] start job, with 945415 subproblems.
+[2025-08-02 03:50:56.450] gpu [0] start job, with 1701747 subproblems.
+[2025-08-02 04:00:02.375] gpu [5] finish job.
+[2025-08-02 04:00:10.893] gpu [0] finish job.
+[2025-08-02 04:00:16.627] gpu [2] finish job.
+[2025-08-02 04:00:39.946] gpu [1] finish job.
+[2025-08-02 04:00:40.327] gpu [6] finish job.
+[2025-08-02 04:01:01.629] gpu [7] finish job.
+[2025-08-02 04:01:05.702] gpu [4] finish job.
+[2025-08-02 04:01:19.017] gpu [3] finish job.
+[2025-08-02 04:01:19.026] cuda 23 queens result 24233937684440, calc time: [624520.00ms]
+[2025-08-02 04:01:19.026] ===============================================================
+[2025-08-02 04:01:59.303] ===============================================================
+[2025-08-02 04:01:59.440] Use 136.75ms to generate 13335292 subproblems!
+[2025-08-02 04:02:01.227] gpu [3] start job, with 1600235 subproblems.
+[2025-08-02 04:02:01.250] gpu [7] start job, with 1333532 subproblems.
+[2025-08-02 04:02:01.256] gpu [1] start job, with 2133646 subproblems.
+[2025-08-02 04:02:01.265] gpu [5] start job, with 1333529 subproblems.
+[2025-08-02 04:02:01.276] gpu [4] start job, with 1466882 subproblems.
+[2025-08-02 04:02:01.321] gpu [2] start job, with 1733587 subproblems.
+[2025-08-02 04:02:01.338] gpu [0] start job, with 2400352 subproblems.
+[2025-08-02 04:02:01.357] gpu [6] start job, with 1333529 subproblems.
+[2025-08-02 05:27:16.826] gpu [0] finish job.
+[2025-08-02 05:28:54.185] gpu [2] finish job.
+[2025-08-02 05:30:57.757] gpu [7] finish job.
+[2025-08-02 05:31:01.777] gpu [4] finish job.
+[2025-08-02 05:33:57.648] gpu [5] finish job.
+[2025-08-02 05:35:33.353] gpu [1] finish job.
+[2025-08-02 05:37:11.606] gpu [6] finish job.
+[2025-08-02 05:42:57.335] gpu [3] finish job.
+[2025-08-02 05:42:57.358] cuda 24 queens result 227514171973736, calc time: [6058055.00ms]
+[2025-08-02 05:42:57.358] ===============================================================
+[2025-08-02 05:43:55.243] ===============================================================
+[2025-08-02 05:43:55.410] Use 166.52ms to generate 18480585 subproblems!
+[2025-08-02 05:43:58.391] gpu [6] start job, with 1848058 subproblems.
+[2025-08-02 05:43:58.427] gpu [1] start job, with 2956893 subproblems.
+[2025-08-02 05:43:58.516] gpu [0] start job, with 3326505 subproblems.
+[2025-08-02 05:43:58.533] gpu [2] start job, with 2402475 subproblems.
+[2025-08-02 05:43:58.547] gpu [5] start job, with 1848058 subproblems.
+[2025-08-02 05:43:58.548] gpu [4] start job, with 2032864 subproblems.
+[2025-08-02 05:43:58.589] gpu [3] start job, with 2217670 subproblems.
+[2025-08-02 05:43:58.619] gpu [7] start job, with 1848062 subproblems.
+[2025-08-02 19:18:37.460] gpu [0] finish job.
+[2025-08-02 19:44:30.628] gpu [6] finish job.
+[2025-08-02 20:25:19.185] gpu [5] finish job.
+[2025-08-02 20:31:00.016] gpu [2] finish job.
+[2025-08-02 20:54:01.380] gpu [3] finish job.
+[2025-08-02 21:05:46.293] gpu [7] finish job.
+[2025-08-02 21:13:23.488] gpu [1] finish job.
+[2025-08-02 21:28:10.327] gpu [4] finish job.
+[2025-08-02 21:28:10.341] cuda 25 queens result 2207893435808352, calc time: [56655096.00ms]
+[2025-08-02 21:28:10.341] ===============================================================
