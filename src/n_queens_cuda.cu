@@ -21,10 +21,8 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
         int right = tot[tid * 3 + 2];
         int valid_pos = last & ~cur & ~left & ~right;
 
-        if (valid_pos == 0) return;
-
         asm(".reg .s32 base_addr, top, tmp, tmp2;\n\t"
-            ".reg .s64 ltmp;\n\t"
+            ".reg .s64 ltmp, ltmp2;\n\t"
             ".reg .pred p, q, z;\n\t"
             ".shared .align 16 .b8 stack[49152];\n\t"
 
@@ -32,6 +30,8 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
             " mov.u32 base_addr, stack;\n\t"
             " mad.lo.s32 tmp2, top, 16, base_addr;\n\t"
             " st.shared.v4.u32 [tmp2], {%1, %2, %3, %4};\n\t"               // stack[top] = {cur, left, right, valid_pos}
+            " setp.eq.s32 p, %4, 0;\n\t"                                    // valid_pos == 0
+            " @p bra FINISH;\n\t"                                           // return;
             " add.s32 top, top, 32;\n\t"                                    // top += 32
 
             " LOOP:\n\t"
@@ -60,22 +60,21 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
             " setp.eq.s32 p, tmp, %8;\n\t"                                  // popc(cur) == N - 1
             " setp.eq.s32 q, %4, 0;\n\t"                                    // valid_pos == 0
             " or.pred z, p, q;\n\t"                                         // valid_pos == 0 || popc(cur) == N - 1
-            " @z bra ADD;\n\t"
 
-            " mad.lo.s32 tmp2, top, 16, base_addr;\n\t"
-            " st.shared.v4.u32 [tmp2], {%1, %2, %3, %4};\n\t"               // stack[top] = {cur, left, right, valid_pos}
-            " add.s32 top, top, 32;\n\t"                                    // top += 32
-            " bra.uni LOOP;\n\t"
-
-            " ADD:\n\t"
             " popc.b32 tmp, %4;\n\t"                                        // tmp = popc(valid_pos)
             " cvt.s64.s32 ltmp, tmp;\n\t"
+            " cvt.s64.s32 ltmp2, 0;\n\t"
+            " selp.s64 ltmp, ltmp, ltmp2, z;\n\t"                           // ltmp = (z == 1 ? ltmp : ltmp2)
             " add.s64 %0, %0, ltmp;\n\t"                                    // sum += 1
+
+            " @!z mad.lo.s32 tmp2, top, 16, base_addr;\n\t"
+            " @!z st.shared.v4.u32 [tmp2], {%1, %2, %3, %4};\n\t"           // stack[top] = {cur, left, right, valid_pos}
+            " @!z add.s32 top, top, 32;\n\t"                                // top += 32
             " bra.uni LOOP;\n\t"
 
             " FINISH:\n\t"
             :"+l"(sum), "+r"(cur), "+r"(left), "+r"(right), "+r"(valid_pos) // output
-            :"r"(top), "r"(bottom), "r"(last), "r"(N - 1) // input
+            :"r"(top), "r"(bottom), "r"(last), "r"(N - 1)                   // input
         );
 
         partial_sum[tid] = sum;
