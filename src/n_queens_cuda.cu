@@ -23,14 +23,14 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
 
         if (valid_pos == 0) return;
 
-        asm(".reg .s32 base_addr, top, tmp, tmp2, cur, left, right, valid_pos;\n\t"
+        asm(".reg .s32 base_addr, top, tmp, tmp2;\n\t"
+            ".reg .s64 ltmp;\n\t"
             ".reg .pred p, q, z;\n\t"
             ".shared .align 4 .b8 stack[49152];\n\t"
 
             " mov.u32 top, %5;\n\t"
             " mov.u32 base_addr, stack;\n\t"
-            " shl.b32 tmp2, top, 2;\n\t"
-            " add.s32 tmp2, tmp2, base_addr;\n\t"
+            " mad.lo.s32 tmp2, top, 4, base_addr;\n\t"
             " st.shared.u32 [tmp2], %1;\n\t"                                // stack[top] = cur
             " st.shared.u32 [tmp2 + 128], %2;\n\t"                          // stack[top + 32] = left
             " st.shared.u32 [tmp2 + 256], %3;\n\t"                          // stack[top + 64] = right
@@ -41,51 +41,49 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
             " setp.eq.s32 p, top, %6;\n\t"                                  // top == bottom
             " @p bra FINISH;\n\t"                                           // done
 
-            " shl.b32 tmp2, top, 2;\n\t"
-            " add.s32 tmp2, tmp2, base_addr;\n\t"
-            " ld.shared.u32 valid_pos, [tmp2 + -128];\n\t"                  // valid_pos = stack[top - 32]
-            " ld.shared.u32 right, [tmp2 + -256];\n\t"                      // right = stack[top - 64]
-            " ld.shared.u32 left, [tmp2 + -384];\n\t"                       // left = stack[top - 96]
-            " ld.shared.u32 cur, [tmp2 + -512];\n\t"                        // cur = stack[top - 128]
+            " mad.lo.s32 tmp2, top, 4, base_addr;\n\t"
+            " ld.shared.u32 %4, [tmp2 + -128];\n\t"                         // valid_pos = stack[top - 32]
+            " ld.shared.u32 %3, [tmp2 + -256];\n\t"                         // right = stack[top - 64]
+            " ld.shared.u32 %2, [tmp2 + -384];\n\t"                         // left = stack[top - 96]
+            " ld.shared.u32 %1, [tmp2 + -512];\n\t"                         // cur = stack[top - 128]
 
-            " neg.s32 tmp, valid_pos;\n\t"                                  // p = -valid_pos
-            " and.b32 tmp, valid_pos, tmp;\n\t"                             // p = valid_pos & (-valid_pos)
-            " sub.s32 valid_pos, valid_pos, tmp;\n\t"                       // valid_pos -= p
-            " st.shared.s32 [tmp2 + -128], valid_pos;\n\t"                  // stack[top - 32] = valid_pos
-            " setp.eq.s32 p, valid_pos, 0;\n\t"                             // valid_pos == 0
+            " neg.s32 tmp, %4;\n\t"                                         // p = -valid_pos
+            " and.b32 tmp, %4, tmp;\n\t"                                    // p = valid_pos & (-valid_pos)
+            " sub.s32 %4, %4, tmp;\n\t"                                     // valid_pos -= p
+            " st.shared.s32 [tmp2 + -128], %4;\n\t"                         // stack[top - 32] = valid_pos
+            " setp.eq.s32 p, %4, 0;\n\t"                                    // valid_pos == 0
             " @p sub.s32 top, top, 128;\n\t"                                // top -= 128
 
-            " or.b32 cur, cur, tmp;\n\t"                                    // cur = cur | p
-            " or.b32 left, left, tmp;\n\t"                                  // left = left | p
-            " shl.b32 left, left, 1;\n\t"                                   // left = left << 1
-            " or.b32 right, right, tmp;\n\t"                                // right = right | p
-            " shr.b32 right, right, 1;\n\t"                                 // right = right >> 1
-            " lop3.b32 tmp, cur, left, right, 0x1;\n\t"                     // tmp = ~cur & ~left & ~right;
-            " and.b32 valid_pos, %7, tmp;\n\t"                              // valid_pos = last & tmp
-            " popc.b32 tmp, cur;\n\t"                                       // tmp = popc(cur)
+            " or.b32 %1, %1, tmp;\n\t"                                      // cur = cur | p
+            " or.b32 %2, %2, tmp;\n\t"                                      // left = left | p
+            " shl.b32 %2, %2, 1;\n\t"                                       // left = left << 1
+            " or.b32 %3, %3, tmp;\n\t"                                      // right = right | p
+            " shr.b32 %3, %3, 1;\n\t"                                       // right = right >> 1
+            " lop3.b32 tmp, %1, %2, %3, 0x1;\n\t"                           // tmp = ~cur & ~left & ~right;
+            " and.b32 %4, %7, tmp;\n\t"                                     // valid_pos = last & tmp
+            " popc.b32 tmp, %1;\n\t"                                        // tmp = popc(cur)
             " sub.s32 tmp2, %8, 1;\n\t"                                     // tmp2 = N - 1
             " setp.eq.s32 p, tmp, tmp2;\n\t"                                // popc(cur) == N - 1
-            " setp.eq.s32 q, valid_pos, 0;\n\t"                             // valid_pos == 0
+            " setp.eq.s32 q, %4, 0;\n\t"                                    // valid_pos == 0
             " or.pred z, p, q;\n\t"                                         // valid_pos == 0 || popc(cur) == N - 1
             " @z bra ADD;\n\t"
 
-            " shl.b32 tmp2, top, 2;\n\t"
-            " add.s32 tmp2, tmp2, base_addr;\n\t"
-            " st.shared.u32 [tmp2], cur;\n\t"                               // stack[top] = cur
-            " st.shared.u32 [tmp2 + 128], left;\n\t"                        // stack[top + 32] = left
-            " st.shared.u32 [tmp2 + 256], right;\n\t"                       // stack[top + 64] = right
-            " st.shared.u32 [tmp2 + 384], valid_pos;\n\t"                   // stack[top + 96] = valid_pos
+            " mad.lo.s32 tmp2, top, 4, base_addr;\n\t"
+            " st.shared.u32 [tmp2], %1;\n\t"                                // stack[top] = cur
+            " st.shared.u32 [tmp2 + 128], %2;\n\t"                          // stack[top + 32] = left
+            " st.shared.u32 [tmp2 + 256], %3;\n\t"                          // stack[top + 64] = right
+            " st.shared.u32 [tmp2 + 384], %4;\n\t"                          // stack[top + 96] = valid_pos
             " add.s32 top, top, 128;\n\t"                                   // top += 128
             " bra LOOP;\n\t"
 
             " ADD:\n\t"
-            " popc.b32 tmp, valid_pos;\n\t"                                 // tmp = popc(valid_pos)
-            " setp.eq.s32 p, tmp, 1;\n\t"                                   // popc(valid_pos) == 1
-            " @p add.s64 %0, %0, 1;\n\t"                                    // sum += 1
+            " popc.b32 tmp, %4;\n\t"                                        // tmp = popc(valid_pos)
+            " cvt.s64.s32 ltmp, tmp;\n\t"
+            " add.s64 %0, %0, ltmp;\n\t"                                    // sum += 1
             " bra LOOP;\n\t"
             " FINISH:\n\t"
-            :"+l"(sum)  // output
-            : "r"(cur), "r"(left), "r"(right), "r"(valid_pos), "r"(top), "r"(bottom), "r"(last), "r"(N) // input
+            :"+l"(sum), "+r"(cur), "+r"(left), "+r"(right), "+r"(valid_pos) // output
+            :"r"(top), "r"(bottom), "r"(last), "r"(N) // input
         );
 
         partial_sum[tid] = sum;
