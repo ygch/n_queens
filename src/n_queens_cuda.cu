@@ -13,8 +13,7 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
 
     if (tid < cnt) {
         long long sum = 0;
-        __shared__ int4 stack[48 * 64];
-        const int bottom = (threadIdx.x / 32) * 32 * STACKSIZE + threadIdx.x % 32;
+        const int bottom = (threadIdx.x / 32) * 32 * STACKSIZE * 4 + threadIdx.x % 32;
         int top = bottom;
 
         int cur = tot[tid * 3];
@@ -24,33 +23,70 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
 
         if (valid_pos == 0) return;
 
-        stack[top] = make_int4(cur, left, right, valid_pos);
-        top += 32;
+        asm(".reg .s32 base_addr, top, tmp, tmp2, cur, left, right, valid_pos;\n\t"
+            ".reg .pred p, q, z;\n\t"
+            ".shared .align 4 .b8 stack[49152];\n\t"
 
-        while (top != bottom) {
-            valid_pos = stack[top - 32].w;
-            right = stack[top - 32].z;
-            left = stack[top - 32].y;
-            cur = stack[top - 32].x;
+            " mov.u32 top, %5;\n\t"
+            " mov.u32 base_addr, stack;\n\t"
+            " shl.b32 tmp2, top, 2;\n\t"
+            " add.s32 tmp2, tmp2, base_addr;\n\t"
+            " st.shared.u32 [tmp2], %1;\n\t"                                // stack[top] = cur
+            " st.shared.u32 [tmp2 + 128], %2;\n\t"                          // stack[top + 32] = left
+            " st.shared.u32 [tmp2 + 256], %3;\n\t"                          // stack[top + 64] = right
+            " st.shared.u32 [tmp2 + 384], %4;\n\t"                          // stack[top + 96] = valid_pos
+            " add.s32 top, top, 128;\n\t"                                   // top += 128
 
-            int p = valid_pos & (-valid_pos);
-            valid_pos -= p;
-            stack[top - 32].w = valid_pos;
-            top -= (valid_pos == 0 ? 32 : 0);
+            " LOOP:\n\t"
+            " setp.eq.s32 p, top, %6;\n\t"                                  // top == bottom
+            " @p bra FINISH;\n\t"                                           // done
 
-            cur = cur | p;
-            left = (left | p) << 1;
-            right = (right | p) >> 1;
-            valid_pos = last & ~cur & ~left & ~right;
+            " shl.b32 tmp2, top, 2;\n\t"
+            " add.s32 tmp2, tmp2, base_addr;\n\t"
+            " ld.shared.u32 valid_pos, [tmp2 + -128];\n\t"                  // valid_pos = stack[top - 32]
+            " ld.shared.u32 right, [tmp2 + -256];\n\t"                      // right = stack[top - 64]
+            " ld.shared.u32 left, [tmp2 + -384];\n\t"                       // left = stack[top - 96]
+            " ld.shared.u32 cur, [tmp2 + -512];\n\t"                        // cur = stack[top - 128]
 
-            if (valid_pos == 0 || __popc(cur) == N - 1) {
-                sum += __popc(valid_pos);
-                continue;
-            }
+            " neg.s32 tmp, valid_pos;\n\t"                                  // p = -valid_pos
+            " and.b32 tmp, valid_pos, tmp;\n\t"                             // p = valid_pos & (-valid_pos)
+            " sub.s32 valid_pos, valid_pos, tmp;\n\t"                       // valid_pos -= p
+            " st.shared.s32 [tmp2 + -128], valid_pos;\n\t"                  // stack[top - 32] = valid_pos
+            " setp.eq.s32 p, valid_pos, 0;\n\t"                             // valid_pos == 0
+            " @p sub.s32 top, top, 128;\n\t"                                // top -= 128
 
-            stack[top] = make_int4(cur, left, right, valid_pos);
-            top += 32;
-        }
+            " or.b32 cur, cur, tmp;\n\t"                                    // cur = cur | p
+            " or.b32 left, left, tmp;\n\t"                                  // left = left | p
+            " shl.b32 left, left, 1;\n\t"                                   // left = left << 1
+            " or.b32 right, right, tmp;\n\t"                                // right = right | p
+            " shr.b32 right, right, 1;\n\t"                                 // right = right >> 1
+            " lop3.b32 tmp, cur, left, right, 0x1;\n\t"                     // tmp = ~cur & ~left & ~right;
+            " and.b32 valid_pos, %7, tmp;\n\t"                              // valid_pos = last & tmp
+            " popc.b32 tmp, cur;\n\t"                                       // tmp = popc(cur)
+            " sub.s32 tmp2, %8, 1;\n\t"                                     // tmp2 = N - 1
+            " setp.eq.s32 p, tmp, tmp2;\n\t"                                // popc(cur) == N - 1
+            " setp.eq.s32 q, valid_pos, 0;\n\t"                             // valid_pos == 0
+            " or.pred z, p, q;\n\t"                                         // valid_pos == 0 || popc(cur) == N - 1
+            " @z bra ADD;\n\t"
+
+            " shl.b32 tmp2, top, 2;\n\t"
+            " add.s32 tmp2, tmp2, base_addr;\n\t"
+            " st.shared.u32 [tmp2], cur;\n\t"                               // stack[top] = cur
+            " st.shared.u32 [tmp2 + 128], left;\n\t"                        // stack[top + 32] = left
+            " st.shared.u32 [tmp2 + 256], right;\n\t"                       // stack[top + 64] = right
+            " st.shared.u32 [tmp2 + 384], valid_pos;\n\t"                   // stack[top + 96] = valid_pos
+            " add.s32 top, top, 128;\n\t"                                   // top += 128
+            " bra LOOP;\n\t"
+
+            " ADD:\n\t"
+            " popc.b32 tmp, valid_pos;\n\t"                                 // tmp = popc(valid_pos)
+            " setp.eq.s32 p, tmp, 1;\n\t"                                   // popc(valid_pos) == 1
+            " @p add.s64 %0, %0, 1;\n\t"                                    // sum += 1
+            " bra LOOP;\n\t"
+            " FINISH:\n\t"
+            :"+l"(sum)  // output
+            : "r"(cur), "r"(left), "r"(right), "r"(valid_pos), "r"(top), "r"(bottom), "r"(last), "r"(N) // input
+        );
 
         partial_sum[tid] = sum;
     }
@@ -86,7 +122,8 @@ long long cuda_n_queens(int N, int rows) {
     vector<long long> new_cnt(gpu_num), start_pos(gpu_num);
     long long total = 0;
     if (gpu_num == 8) {
-        float ratio[8] = {0.18, 0.16, 0.13, 0.12, 0.11, 0.1, 0.1, 0.1};
+        //float ratio[8] = {0.198, 0.156, 0.128, 0.117, 0.105, 0.100, 0.098, 0.098};
+        float ratio[8] = {0.18, 0.16, 0.13, 0.12, 0.11, 0.100, 0.10, 0.10};
         for (int i = 0; i < gpu_num - 1; i++) {
             new_cnt[i] = cnt * ratio[i];
             start_pos[i] = total;
