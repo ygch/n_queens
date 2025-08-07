@@ -13,7 +13,7 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
 
     if (tid < cnt) {
         long long sum = 0;
-        const int bottom = (threadIdx.x / 32) * 32 * STACKSIZE * 4 + threadIdx.x % 32;
+        const int bottom = (threadIdx.x / 32) * 32 * STACKSIZE + threadIdx.x % 32;
         int top = bottom;
 
         int cur = tot[tid * 3];
@@ -26,33 +26,28 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
         asm(".reg .s32 base_addr, top, tmp, tmp2;\n\t"
             ".reg .s64 ltmp;\n\t"
             ".reg .pred p, q, z;\n\t"
-            ".shared .align 4 .b8 stack[49152];\n\t"
+            ".shared .align 16 .b8 stack[49152];\n\t"
 
             " mov.u32 top, %5;\n\t"
             " mov.u32 base_addr, stack;\n\t"
-            " mad.lo.s32 tmp2, top, 4, base_addr;\n\t"
-            " st.shared.u32 [tmp2], %1;\n\t"                                // stack[top] = cur
-            " st.shared.u32 [tmp2 + 128], %2;\n\t"                          // stack[top + 32] = left
-            " st.shared.u32 [tmp2 + 256], %3;\n\t"                          // stack[top + 64] = right
-            " st.shared.u32 [tmp2 + 384], %4;\n\t"                          // stack[top + 96] = valid_pos
-            " add.s32 top, top, 128;\n\t"                                   // top += 128
+            " mad.lo.s32 tmp2, top, 16, base_addr;\n\t"
+            " st.shared.v4.u32 [tmp2], {%1, %2, %3, %4};\n\t"               // stack[top] = {cur, left, right, valid_pos}
+            " add.s32 top, top, 32;\n\t"                                    // top += 32
 
             " LOOP:\n\t"
             " setp.eq.s32 p, top, %6;\n\t"                                  // top == bottom
             " @p bra FINISH;\n\t"                                           // done
 
-            " mad.lo.s32 tmp2, top, 4, base_addr;\n\t"
-            " ld.shared.u32 %4, [tmp2 + -128];\n\t"                         // valid_pos = stack[top - 32]
-            " ld.shared.u32 %3, [tmp2 + -256];\n\t"                         // right = stack[top - 64]
-            " ld.shared.u32 %2, [tmp2 + -384];\n\t"                         // left = stack[top - 96]
-            " ld.shared.u32 %1, [tmp2 + -512];\n\t"                         // cur = stack[top - 128]
+            " mad.lo.s32 tmp2, top, 16, base_addr;\n\t"
+            " ld.shared.v4.u32 {%1, %2, %3, %4}, [tmp2 + -512];\n\t"        // {cur, left, right, valid_pos} = stack[top - 32]
 
             " neg.s32 tmp, %4;\n\t"                                         // p = -valid_pos
             " and.b32 tmp, %4, tmp;\n\t"                                    // p = valid_pos & (-valid_pos)
             " sub.s32 %4, %4, tmp;\n\t"                                     // valid_pos -= p
-            " st.shared.s32 [tmp2 + -128], %4;\n\t"                         // stack[top - 32] = valid_pos
-            " setp.eq.s32 p, %4, 0;\n\t"                                    // valid_pos == 0
-            " @p sub.s32 top, top, 128;\n\t"                                // top -= 128
+            " st.shared.s32 [tmp2 + -500], %4;\n\t"                         // stack[top - 32] = valid_pos
+            " setp.eq.s32 p, %4, 0;\n\t"                                    // p = (valid_pos == 0)
+            " selp.b32 tmp2, 32, 0, p;\n\t"                                 // tmp2 = (p==1 ? 32 : 0)
+            " sub.s32 top, top, tmp2;\n\t"                                  // top -= 32
 
             " or.b32 %1, %1, tmp;\n\t"                                      // cur = cur | p
             " or.b32 %2, %2, tmp;\n\t"                                      // left = left | p
@@ -62,28 +57,25 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
             " lop3.b32 tmp, %1, %2, %3, 0x1;\n\t"                           // tmp = ~cur & ~left & ~right;
             " and.b32 %4, %7, tmp;\n\t"                                     // valid_pos = last & tmp
             " popc.b32 tmp, %1;\n\t"                                        // tmp = popc(cur)
-            " sub.s32 tmp2, %8, 1;\n\t"                                     // tmp2 = N - 1
-            " setp.eq.s32 p, tmp, tmp2;\n\t"                                // popc(cur) == N - 1
+            " setp.eq.s32 p, tmp, %8;\n\t"                                  // popc(cur) == N - 1
             " setp.eq.s32 q, %4, 0;\n\t"                                    // valid_pos == 0
             " or.pred z, p, q;\n\t"                                         // valid_pos == 0 || popc(cur) == N - 1
             " @z bra ADD;\n\t"
 
-            " mad.lo.s32 tmp2, top, 4, base_addr;\n\t"
-            " st.shared.u32 [tmp2], %1;\n\t"                                // stack[top] = cur
-            " st.shared.u32 [tmp2 + 128], %2;\n\t"                          // stack[top + 32] = left
-            " st.shared.u32 [tmp2 + 256], %3;\n\t"                          // stack[top + 64] = right
-            " st.shared.u32 [tmp2 + 384], %4;\n\t"                          // stack[top + 96] = valid_pos
-            " add.s32 top, top, 128;\n\t"                                   // top += 128
-            " bra LOOP;\n\t"
+            " mad.lo.s32 tmp2, top, 16, base_addr;\n\t"
+            " st.shared.v4.u32 [tmp2], {%1, %2, %3, %4};\n\t"               // stack[top] = {cur, left, right, valid_pos}
+            " add.s32 top, top, 32;\n\t"                                    // top += 32
+            " bra.uni LOOP;\n\t"
 
             " ADD:\n\t"
             " popc.b32 tmp, %4;\n\t"                                        // tmp = popc(valid_pos)
             " cvt.s64.s32 ltmp, tmp;\n\t"
             " add.s64 %0, %0, ltmp;\n\t"                                    // sum += 1
-            " bra LOOP;\n\t"
+            " bra.uni LOOP;\n\t"
+
             " FINISH:\n\t"
             :"+l"(sum), "+r"(cur), "+r"(left), "+r"(right), "+r"(valid_pos) // output
-            :"r"(top), "r"(bottom), "r"(last), "r"(N) // input
+            :"r"(top), "r"(bottom), "r"(last), "r"(N - 1) // input
         );
 
         partial_sum[tid] = sum;
