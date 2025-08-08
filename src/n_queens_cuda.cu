@@ -14,7 +14,6 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
     if (tid < cnt) {
         long long sum = 0;
         const int bottom = (threadIdx.x / 32) * 32 * STACKSIZE + threadIdx.x % 32;
-        int top = bottom;
 
         int cur = tot[tid * 3];
         int left = tot[tid * 3 + 1];
@@ -35,7 +34,7 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
             " add.s32 top, top, 32;\n\t"                                    // top += 32
 
             " LOOP:\n\t"
-            " setp.eq.s32 p, top, %6;\n\t"                                  // top == bottom
+            " setp.eq.s32 p, top, %5;\n\t"                                  // top == bottom
             " @p bra FINISH;\n\t"                                           // done
 
             " mad.lo.s32 tmp2, top, 16, base_addr;\n\t"
@@ -55,9 +54,9 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
             " or.b32 %3, %3, tmp;\n\t"                                      // right = right | p
             " shr.b32 %3, %3, 1;\n\t"                                       // right = right >> 1
             " lop3.b32 tmp, %1, %2, %3, 0x1;\n\t"                           // tmp = ~cur & ~left & ~right;
-            " and.b32 %4, %7, tmp;\n\t"                                     // valid_pos = last & tmp
+            " and.b32 %4, %6, tmp;\n\t"                                     // valid_pos = last & tmp
             " popc.b32 tmp, %1;\n\t"                                        // tmp = popc(cur)
-            " setp.eq.s32 p, tmp, %8;\n\t"                                  // popc(cur) == N - 1
+            " setp.eq.s32 p, tmp, %7;\n\t"                                  // popc(cur) == N - 1
             " setp.eq.s32 q, %4, 0;\n\t"                                    // valid_pos == 0
             " or.pred z, p, q;\n\t"                                         // valid_pos == 0 || popc(cur) == N - 1
 
@@ -74,7 +73,7 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
 
             " FINISH:\n\t"
             :"+l"(sum), "+r"(cur), "+r"(left), "+r"(right), "+r"(valid_pos) // output
-            :"r"(top), "r"(bottom), "r"(last), "r"(N - 1)                   // input
+            :"r"(bottom), "r"(last), "r"(N - 1)                             // input
         );
 
         partial_sum[tid] = sum;
