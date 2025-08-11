@@ -147,9 +147,10 @@ long long cuda_n_queens(int N, int rows) {
         int idx = omp_get_thread_num();
         CU_SAFE_CALL(cudaSetDevice(idx));
 
+        long long total = cnt;
         long long cnt = new_cnt[idx];
 
-        print_with_time("gpu [%d] start job, with %lld subproblems.\n", idx, cnt);
+        print_with_time("gpu [%d] start job, with %lld(%.3f) subproblems.\n", idx, cnt, cnt * 1.0 / total);
 
         int *cuda_tot;
         CU_SAFE_CALL(cudaMalloc(&cuda_tot, sizeof(int) * cnt * 3));
