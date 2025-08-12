@@ -13,7 +13,7 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
 
     if (tid < cnt) {
         long long sum = 0;
-        const int bottom = (threadIdx.x / 32) * 32 * STACKSIZE + threadIdx.x % 32;
+        const int bottom = ((threadIdx.x / 32) * 32 * STACKSIZE + threadIdx.x % 32) << 4;
 
         int cur = tot[tid * 3];
         int left = tot[tid * 3 + 1];
@@ -22,32 +22,32 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
 
         if(valid_pos == 0) return;
 
-        asm(".reg .s32 base_addr, top, tmp, tmp2;\n\t"
+        asm(".reg .s32 top, tmp, tmp2;\n\t"
             ".reg .s64 ltmp;\n\t"
             ".reg .pred p, q, z;\n\t"
             ".shared .align 16 .b8 stack[49152];\n\t"
 
             " mov.u32 top, %5;\n\t"
-            " mov.u32 base_addr, stack;\n\t"
+            " mov.u32 tmp, stack;\n\t"
+	        " add.s32 %5, %5, tmp;\n\t"
+	        " add.s32 top, top, tmp;\n\t"
 
-            " mad.lo.s32 tmp2, top, 16, base_addr;\n\t"                     // calculate stack top address
-            " st.shared.v4.u32 [tmp2], {%1, %2, %3, %4};\n\t"               // stack[top] = {cur, left, right, valid_pos}
-            " add.s32 top, top, 32;\n\t"                                    // top += 32
+            " st.shared.v4.u32 [top], {%1, %2, %3, %4};\n\t"                // stack[top] = {cur, left, right, valid_pos}
+            " add.s32 top, top, 512;\n\t"                                   // top += 512
 
             " LOOP:\n\t"
             " setp.eq.s32 p, top, %5;\n\t"                                  // top == bottom
             " @p bra FINISH;\n\t"                                           // done
 
-            " mad.lo.s32 tmp2, top, 16, base_addr;\n\t"
-            " ld.shared.v4.u32 {%1, %2, %3, %4}, [tmp2 + -512];\n\t"        // {cur, left, right, valid_pos} = stack[top - 32]
+            " ld.shared.v4.u32 {%1, %2, %3, %4}, [top + -512];\n\t"         // {cur, left, right, valid_pos} = stack[top - 512]
 
             " neg.s32 tmp, %4;\n\t"                                         // p = -valid_pos
             " and.b32 tmp, %4, tmp;\n\t"                                    // p = valid_pos & (-valid_pos)
             " sub.s32 %4, %4, tmp;\n\t"                                     // valid_pos -= p
-            " st.shared.s32 [tmp2 + -500], %4;\n\t"                         // stack[top - 32] = valid_pos
+            " st.shared.s32 [top + -500], %4;\n\t"                          // stack[top - 500] = valid_pos
             " setp.eq.s32 p, %4, 0;\n\t"                                    // p = (valid_pos == 0)
-            " selp.b32 tmp2, 32, 0, p;\n\t"                                 // tmp2 = (p==1 ? 32 : 0)
-            " sub.s32 top, top, tmp2;\n\t"                                  // top -= 32
+            " selp.b32 tmp2, 512, 0, p;\n\t"                                // tmp2 = (p==1 ? 512 : 0)
+            " sub.s32 top, top, tmp2;\n\t"                                  // top -= 512
 
             " or.b32 %1, %1, tmp;\n\t"                                      // cur = cur | p
             " or.b32 %2, %2, tmp;\n\t"                                      // left = left | p
@@ -65,9 +65,8 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
             " cvt.s64.s32 ltmp, tmp;\n\t"                                   // s32 -> s64
             " @z add.s64 %0, %0, ltmp;\n\t"                                 // sum += popc(valid_pos)
 
-            " mad.lo.s32 tmp2, top, 16, base_addr;\n\t"                     // remove @!z to reduce branches
-            " @!z st.shared.v4.u32 [tmp2], {%1, %2, %3, %4};\n\t"           // stack[top] = {cur, left, right, valid_pos}
-            " @!z add.s32 top, top, 32;\n\t"                                // top += 32
+            " @!z st.shared.v4.u32 [top], {%1, %2, %3, %4};\n\t"            // stack[top] = {cur, left, right, valid_pos}
+            " @!z add.s32 top, top, 512;\n\t"                               // top += 512
             " bra.uni LOOP;\n\t"
 
             " FINISH:\n\t"
