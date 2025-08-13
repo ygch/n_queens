@@ -7,9 +7,8 @@
 
 inline int get_block_size(long long size, int block_size) { return (size + block_size - 1) / block_size; }
 
-__device__ unsigned long long int global_counter = 0;
-__global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt) {
-    unsigned long long tid = atomicAdd(&global_counter, 1);
+__global__ void n_queens(int N, int *tot, long long *partial_sum, unsigned long long* global_counter, long long cnt) {
+    unsigned long long tid = atomicAdd(global_counter, 1);
     const int last = (1 << N) - 1;
 
     while (tid < cnt) {
@@ -77,8 +76,43 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
         );
 
         partial_sum[tid] = sum;
-        tid = atomicAdd(&global_counter, 1);
+        tid = atomicAdd(global_counter, 1);
     }
+}
+
+static void process_one_chunk(int N, int* chunk, long long* partial_sum, int cnt, int idx) {
+    CU_SAFE_CALL(cudaSetDevice(idx));
+    print_with_time("gpu [%d] start job, with %lld subproblems.\n", idx, cnt);
+
+    int *cuda_chunk;
+    CU_SAFE_CALL(cudaMalloc(&cuda_chunk, sizeof(int) * cnt * 3));
+    CU_SAFE_CALL(cudaMemcpy(cuda_chunk, chunk, sizeof(int) * cnt * 3, cudaMemcpyHostToDevice));
+
+    long long *cuda_partial_sum;
+    CU_SAFE_CALL(cudaMalloc(&cuda_partial_sum, sizeof(long long) * cnt));
+    CU_SAFE_CALL(cudaMemset(cuda_partial_sum, 0, sizeof(long long) * cnt));
+
+    dim3 dimBlock(CU1DBLOCK);
+    dim3 dimGrid(1024);
+
+    unsigned long long *cuda_global_counter;
+    CU_SAFE_CALL(cudaMalloc(&cuda_global_counter, sizeof(unsigned long long)));
+    CU_SAFE_CALL(cudaMemset(cuda_global_counter, 0, sizeof(unsigned long long)));
+
+    n_queens<<<dimGrid, dimBlock>>>(N, cuda_chunk, cuda_partial_sum, cuda_global_counter, cnt);
+
+    cudaError_t err = cudaDeviceSynchronize();
+    if (err != cudaSuccess) {
+       printf("kernel error: %s\n", cudaGetErrorString(err));
+    }
+
+    CU_SAFE_CALL(cudaMemcpy(partial_sum, cuda_partial_sum, sizeof(long long) * cnt, cudaMemcpyDeviceToHost));
+
+    CU_SAFE_CALL(cudaFree(cuda_chunk));
+    CU_SAFE_CALL(cudaFree(cuda_partial_sum));
+    CU_SAFE_CALL(cudaFree(cuda_global_counter));
+
+    print_with_time("gpu [%d] finish job.\n", idx);
 }
 
 long long cuda_n_queens(int N, int rows) {
@@ -107,76 +141,20 @@ long long cuda_n_queens(int N, int rows) {
         return -1;
     }
 
-    // 2. divide total subproblems to different trunks
-    vector<long long> new_cnt(gpu_num), start_pos(gpu_num);
-    long long total = 0;
-    if (gpu_num == 8) {
-        //float ratio[8] = {0.198, 0.156, 0.128, 0.117, 0.105, 0.100, 0.098, 0.098};
-        float ratio[8] = {0.18, 0.16, 0.13, 0.12, 0.11, 0.100, 0.10, 0.10};
-        for (int i = 0; i < gpu_num - 1; i++) {
-            new_cnt[i] = cnt * ratio[i];
-            start_pos[i] = total;
-            total += new_cnt[i];
-        }
-    } else if (gpu_num == 4) {
-        float ratio[4] = {0.34, 0.25, 0.21, 0.2};
-        for (int i = 0; i < gpu_num - 1; i++) {
-            new_cnt[i] = cnt * ratio[i];
-            start_pos[i] = total;
-            total += new_cnt[i];
-        }
-    } else if (gpu_num == 2) {
-        float ratio[2] = {0.59, 0.41};
-        for (int i = 0; i < gpu_num - 1; i++) {
-            new_cnt[i] = cnt * ratio[i];
-            start_pos[i] = total;
-            total += new_cnt[i];
-        }
+    if(gpu_num == 1) {
+        process_one_chunk(N, tot.data(), partial_sum.data(), cnt, 0);
     } else {
-        long long partial_cnt = cnt / gpu_num;
-        for (int i = 0; i < gpu_num - 1; i++) {
-            new_cnt[i] = partial_cnt;
-            start_pos[i] = total;
-            total += partial_cnt;
-        }
-    }
-    new_cnt[gpu_num - 1] = cnt - total;
-    start_pos[gpu_num - 1] = total;
+        int chunk_num = gpu_num * 4;
+	int chunk_size = cnt / chunk_num;
+#pragma omp parallel for num_threads(gpu_num) schedule(static, 1)
+	for(int i = 0; i < chunk_num; i++)
+	{
+	    long long partial_cnt = (i == chunk_num -1 ? cnt - i * chunk_size : chunk_size);
+	    int* chunk_index  = tot.data() + i * chunk_size * 3;
+	    long long* partial_sum_index = partial_sum.data() + i * chunk_size;
 
-    // 3. use different gpu to process each trunk
-#pragma omp parallel num_threads(gpu_num)
-    {
-        int idx = omp_get_thread_num();
-        CU_SAFE_CALL(cudaSetDevice(idx));
-
-        long long total = cnt;
-        long long cnt = new_cnt[idx];
-
-        print_with_time("gpu [%d] start job, with %lld(%.3f) subproblems.\n", idx, cnt, cnt * 1.0 / total);
-
-        int *cuda_tot;
-        CU_SAFE_CALL(cudaMalloc(&cuda_tot, sizeof(int) * cnt * 3));
-        CU_SAFE_CALL(cudaMemcpy(cuda_tot, tot.data() + start_pos[idx] * 3, sizeof(int) * cnt * 3, cudaMemcpyHostToDevice));
-
-        long long *cuda_partial_sum;
-        CU_SAFE_CALL(cudaMalloc(&cuda_partial_sum, sizeof(long long) * cnt));
-        CU_SAFE_CALL(cudaMemset(cuda_partial_sum, 0, sizeof(long long) * cnt));
-
-        dim3 dimBlock(CU1DBLOCK);
-        dim3 dimGrid(1024);
-
-        n_queens<<<dimGrid, dimBlock>>>(N, cuda_tot, cuda_partial_sum, cnt);
-
-        cudaError_t err = cudaDeviceSynchronize();
-        if (err != cudaSuccess) {
-            printf("kernel error: %s\n", cudaGetErrorString(err));
-        }
-
-        CU_SAFE_CALL(cudaMemcpy(partial_sum.data() + start_pos[idx], cuda_partial_sum, sizeof(long long) * cnt, cudaMemcpyDeviceToHost));
-
-        CU_SAFE_CALL(cudaFree(cuda_tot));
-        CU_SAFE_CALL(cudaFree(cuda_partial_sum));
-        print_with_time("gpu [%d] finish job.\n", idx);
+	    process_one_chunk(N, chunk_index, partial_sum_index, partial_cnt, i % gpu_num);
+	}
     }
 
     for (long long i = 0; i < cnt; i++) {
