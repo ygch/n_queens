@@ -7,11 +7,12 @@
 
 inline int get_block_size(long long size, int block_size) { return (size + block_size - 1) / block_size; }
 
+__device__ unsigned long long int global_counter = 0;
 __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt) {
-    const long long tid = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned long long tid = atomicAdd(&global_counter, 1);
     const int last = (1 << N) - 1;
 
-    if (tid < cnt) {
+    while (tid < cnt) {
         long long sum = 0;
         const int bottom = (threadIdx.x / 32) * 32 * STACKSIZE + threadIdx.x % 32;
 
@@ -76,6 +77,7 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
         );
 
         partial_sum[tid] = sum;
+        tid = atomicAdd(&global_counter, 1);
     }
 }
 
@@ -161,7 +163,7 @@ long long cuda_n_queens(int N, int rows) {
         CU_SAFE_CALL(cudaMemset(cuda_partial_sum, 0, sizeof(long long) * cnt));
 
         dim3 dimBlock(CU1DBLOCK);
-        dim3 dimGrid(get_block_size(cnt, CU1DBLOCK));
+        dim3 dimGrid(1024);
 
         n_queens<<<dimGrid, dimBlock>>>(N, cuda_tot, cuda_partial_sum, cnt);
 
