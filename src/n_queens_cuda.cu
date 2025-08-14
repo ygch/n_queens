@@ -5,16 +5,14 @@
 #include "n_queens.h"
 #include "utils.h"
 
-inline int get_block_size(long long size, int block_size) { return (size + block_size - 1) / block_size; }
-
+__device__ unsigned long long global_counter = 0;
 __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt) {
-    const long long tid = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned long long tid = atomicAdd(&global_counter, 1);
     const int last = (1 << N) - 1;
+    const int bottom = ((threadIdx.x / 32) * 32 * STACKSIZE + threadIdx.x % 32) << 4;
 
-    if (tid < cnt) {
+    while (tid < cnt) {
         long long sum = 0;
-        const int bottom = ((threadIdx.x / 32) * 32 * STACKSIZE + threadIdx.x % 32) << 4;
-
         int cur = tot[tid * 3];
         int left = tot[tid * 3 + 1];
         int right = tot[tid * 3 + 2];
@@ -29,8 +27,8 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
 
             " mov.u32 top, %5;\n\t"
             " mov.u32 tmp, stack;\n\t"
-	        " add.s32 %5, %5, tmp;\n\t"
-	        " add.s32 top, top, tmp;\n\t"
+            " add.s32 %5, %5, tmp;\n\t"
+            " add.s32 top, top, tmp;\n\t"
 
             " st.shared.v4.u32 [top], {%1, %2, %3, %4};\n\t"                // stack[top] = {cur, left, right, valid_pos}
             " add.s32 top, top, 512;\n\t"                                   // top += 512
@@ -63,10 +61,12 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
 
             " popc.b32 tmp, %4;\n\t"                                        // tmp = popc(valid_pos)
             " cvt.s64.s32 ltmp, tmp;\n\t"                                   // s32 -> s64
-            " @z add.s64 %0, %0, ltmp;\n\t"                                 // sum += popc(valid_pos)
+            " selp.b64 ltmp, ltmp, 0, z;\n\t"                               // ltmp = (z == 1 ? ltmp : 0)
+            " add.s64 %0, %0, ltmp;\n\t"                                    // sum += popc(valid_pos)
 
             " @!z st.shared.v4.u32 [top], {%1, %2, %3, %4};\n\t"            // stack[top] = {cur, left, right, valid_pos}
-            " @!z add.s32 top, top, 512;\n\t"                               // top += 512
+            " selp.b32 tmp, 0, 512, z;\n\t"                                 // tmp = (z == 1 ? 0 : 512)
+            " add.s32 top, top, tmp;\n\t"                                   // top += 512
             " bra.uni LOOP;\n\t"
 
             " FINISH:\n\t"
@@ -75,6 +75,7 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
         );
 
         partial_sum[tid] = sum;
+        tid = atomicAdd(&global_counter, 1);
     }
 }
 
@@ -108,22 +109,21 @@ long long cuda_n_queens(int N, int rows) {
     vector<long long> new_cnt(gpu_num), start_pos(gpu_num);
     long long total = 0;
     if (gpu_num == 8) {
-        //float ratio[8] = {0.198, 0.156, 0.128, 0.117, 0.105, 0.100, 0.098, 0.098};
-        float ratio[8] = {0.18, 0.16, 0.13, 0.12, 0.11, 0.100, 0.10, 0.10};
+        float ratio[8] = {0.20, 0.15, 0.12, 0.11, 0.11, 0.11, 0.10, 0.10};
         for (int i = 0; i < gpu_num - 1; i++) {
             new_cnt[i] = cnt * ratio[i];
             start_pos[i] = total;
             total += new_cnt[i];
         }
     } else if (gpu_num == 4) {
-        float ratio[4] = {0.34, 0.25, 0.21, 0.2};
+        float ratio[4] = {0.35, 0.23, 0.22, 0.2};
         for (int i = 0; i < gpu_num - 1; i++) {
             new_cnt[i] = cnt * ratio[i];
             start_pos[i] = total;
             total += new_cnt[i];
         }
     } else if (gpu_num == 2) {
-        float ratio[2] = {0.59, 0.41};
+        float ratio[2] = {0.58, 0.42};
         for (int i = 0; i < gpu_num - 1; i++) {
             new_cnt[i] = cnt * ratio[i];
             start_pos[i] = total;
@@ -160,7 +160,7 @@ long long cuda_n_queens(int N, int rows) {
         CU_SAFE_CALL(cudaMemset(cuda_partial_sum, 0, sizeof(long long) * cnt));
 
         dim3 dimBlock(CU1DBLOCK);
-        dim3 dimGrid(get_block_size(cnt, CU1DBLOCK));
+	dim3 dimGrid(1024);
 
         n_queens<<<dimGrid, dimBlock>>>(N, cuda_tot, cuda_partial_sum, cnt);
 
