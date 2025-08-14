@@ -5,8 +5,6 @@
 #include "n_queens.h"
 #include "utils.h"
 
-inline int get_block_size(long long size, int block_size) { return (size + block_size - 1) / block_size; }
-
 __global__ void n_queens(int N, int *tot, long long *partial_sum, unsigned long long* global_counter, long long cnt) {
     unsigned long long tid = atomicAdd(global_counter, 1);
     const int last = (1 << N) - 1;
@@ -144,7 +142,7 @@ long long cuda_n_queens(int N, int rows) {
     if(gpu_num == 1) {
         process_one_chunk(N, tot.data(), partial_sum.data(), cnt, 0);
     } else {
-        int chunk_num = gpu_num * 4;
+        int chunk_num = gpu_num * 2;
 	int chunk_size = cnt / chunk_num;
 #pragma omp parallel for num_threads(gpu_num) schedule(static, 1)
 	for(int i = 0; i < chunk_num; i++)
