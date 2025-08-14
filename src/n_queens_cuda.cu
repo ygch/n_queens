@@ -111,8 +111,7 @@ long long cuda_n_queens(int N, int rows) {
     vector<long long> new_cnt(gpu_num), start_pos(gpu_num);
     long long total = 0;
     if (gpu_num == 8) {
-        //float ratio[8] = {0.198, 0.156, 0.128, 0.117, 0.105, 0.100, 0.098, 0.098};
-        float ratio[8] = {0.18, 0.16, 0.13, 0.12, 0.11, 0.100, 0.10, 0.10};
+        float ratio[8] = {0.20, 0.15, 0.12, 0.11, 0.11, 0.11, 0.10, 0.10};
         for (int i = 0; i < gpu_num - 1; i++) {
             new_cnt[i] = cnt * ratio[i];
             start_pos[i] = total;
