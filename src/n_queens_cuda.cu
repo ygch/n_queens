@@ -18,9 +18,12 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
         int right = tot[tid * 3 + 2];
         int valid_pos = last & ~cur & ~left & ~right;
 
-        if(valid_pos == 0) return;
+        if(valid_pos == 0) {
+            tid = atomicAdd(&global_counter, 1);
+            continue;
+        }
 
-        asm(".reg .s32 top, tmp, tmp2;\n\t"
+        asm(".reg .s32 top, tmp;\n\t"
             ".reg .s64 ltmp;\n\t"
             ".reg .pred p, q, z;\n\t"
             ".shared .align 16 .b8 stack[49152];\n\t"
@@ -43,14 +46,14 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
             " sub.s32 %4, %4, tmp;\n\t"                                     // valid_pos -= p
             " st.shared.s32 [top + -500], %4;\n\t"                          // stack[top - 500] = valid_pos
             " setp.eq.s32 p, %4, 0;\n\t"                                    // p = (valid_pos == 0)
-            " selp.b32 tmp2, 512, 0, p;\n\t"                                // tmp2 = (p == 1 ? 512 : 0)
-            " sub.s32 top, top, tmp2;\n\t"                                  // top -= 512
 
             " or.b32 %1, %1, tmp;\n\t"                                      // cur = cur | p
             " or.b32 %2, %2, tmp;\n\t"                                      // left = left | p
             " shl.b32 %2, %2, 1;\n\t"                                       // left = left << 1
             " or.b32 %3, %3, tmp;\n\t"                                      // right = right | p
             " shr.b32 %3, %3, 1;\n\t"                                       // right = right >> 1
+            " selp.b32 tmp, 512, 0, p;\n\t"                                 // tmp = (p == 1 ? 512 : 0)
+            " sub.s32 top, top, tmp;\n\t"                                   // top -= 512
             " lop3.b32 tmp, %1, %2, %3, 0x1;\n\t"                           // tmp = ~cur & ~left & ~right;
             " and.b32 %4, %6, tmp;\n\t"                                     // valid_pos = last & tmp
             " popc.b32 tmp, %1;\n\t"                                        // tmp = popc(cur)
