@@ -46,8 +46,8 @@ __global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt)
             " sub.s32 %4, %4, tmp;\n\t"                                     // valid_pos -= p
             " st.shared.s32 [top + -500], %4;\n\t"                          // stack[top - 500] = valid_pos
             " setp.eq.s32 p, %4, 0;\n\t"                                    // p = (valid_pos == 0)
-            " selp.b32 tmp2, 512, 0, p;\n\t"                                 // tmp = (p == 1 ? 512 : 0)
-            " sub.s32 top, top, tmp2;\n\t"                                   // top -= 512
+            " selp.b32 tmp2, 512, 0, p;\n\t"                                // tmp = (p == 1 ? 512 : 0)
+            " sub.s32 top, top, tmp2;\n\t"                                  // top -= 512
 
             " or.b32 %1, %1, tmp;\n\t"                                      // cur = cur | p
             " or.b32 %2, %2, tmp;\n\t"                                      // left = left | p

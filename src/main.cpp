@@ -18,6 +18,11 @@ int main(int argc, char *argv[]) {
         return -1;
     }
 
+    if(N - rows < 2) {
+        printf("Pre-placed rows should be <= %d.\n", N - 2);
+        return -1;
+    }
+
     if (rows < 2) {
         printf("Pre-placed rows shold be at least 2, so set to 2!\n");
         rows = 2;
