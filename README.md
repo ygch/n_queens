@@ -8,7 +8,6 @@ n_queens using openmp and cuda to accelerate.
 * v2.0: Inline PTX optimization;
 * v2.1: Dynamic task fetching optimization;
 * v3.0: Further inline PTX optimization;
-* v3.1: Small modifications.
 
 The following results are achieved based on v2.1. v3.0 has a slight improvement, can roughly bring about 1%~4% speedup.
 # Run time(ms)
