@@ -3,6 +3,13 @@ n_queens using openmp and cuda to accelerate.
 # Usage
 * sh compile.sh
 * ./n_queens 19 6
+# Differences between versions
+* v1.0: Basic implementation, plus int4 optimization;
+* v2.0: Inline PTX optimization;
+* v2.1: Dynamic task fetching optimization;
+* v3.0: Further inline PTX optimization;
+* v3.1: Small modifications.
+The following results are achieved based on v2.1. v3.0 has a slight improvement, can roughly bring about 1%~4% speedup.
 # Run time(ms)
 | N  |  CPU |Openmp| 4090 | A100 | 5090 | H800 |   Count     |
 |:--:|-----:|-----:|-----:|-----:|-----:|-----:|------------:|
