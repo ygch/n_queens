@@ -43,12 +43,12 @@ With one single GPU card, for solving N <= 22, best parameters are: pre-placing 
 
 * 8 RTX 5090 with pre-placing first 6 rows under configuration2.
 
-# Projected cuda runtime for 27-queens
-28 days = 2.5 * 10.52 * 1.04
+# Cuda runtime for 27-queens
+28.4 days
 
 * 8 RTX 5090 with pre-placing first 7 rows under configuration2.
 
 # Projected cuda runtime for 28-queens
-336 days = 28 * 10.52 * 1.14
+340 days = 28.4 * 10.52 * 1.14
 
 * 8 RTX 5090 with pre-placing first 6 rows under configuration1.
