@@ -51,16 +51,3 @@ With one single GPU card, for solving N <= 22, best parameters are: pre-placing 
 340 days = 28.4 * 10.52 * 1.14
 
 * 8 RTX 5090 with pre-placing first 6 rows under configuration1.
-
-# Citation
-If you find our paper and code useful in your research, please consider giving a star ⭐ and citation 📝 :)
-
-```BibTeX
-@article{GPU-N-queens,
-  title={High-Performance N-Queens Solver on GPU: Iterative DFS with Zero Bank Conflicts},
-  author={Guangchao Yao, Yali Li},
-  journal={arXiv preprint arXiv:2511.12009},
-  year={2025}
-}
-```
-Link: https://arxiv.org/pdf/2511.12009
