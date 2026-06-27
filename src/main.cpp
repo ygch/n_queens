@@ -1,56 +1,37 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "n_queens.h"
-#include "macro.h"
+#include "gpu_solver.h"
 #include "utils.h"
 
 int main(int argc, char *argv[]) {
+    if (argc < 2) {
+        printf("Usage: %s <N> [preset_queens]\n", argv[0]);
+        return -1;
+    }
+
     int N = atoi(argv[1]);
-    if (N < 2 || N > 28) {
-        printf("Not allowed %d queens problem!\n", N);
+    if (N < 6 || N > 28) {
+        printf("N must be in [6, 28], got %d\n", N);
         return -1;
     }
 
-    int rows = atoi(argv[2]);
-    if(STACKSIZE + 1 + rows < N) {
-        printf("This configure cannot process %d-queens with pre-placing %d rows. Pre-placed rows should be >= %d.\n", N, rows, N - STACKSIZE - 1);
+    int preset_queens = 6;
+    if (argc >= 3)
+        preset_queens = atoi(argv[2]);
+    if (preset_queens < 4 || preset_queens >= N - 1) {
+        printf("preset_queens must be in [4, N-2], got %d\n", preset_queens);
         return -1;
     }
-
-    if(N - rows < 2) {
-        printf("Pre-placed rows should be <= %d.\n", N - 2);
-        return -1;
-    }
-
-    if (rows < 2) {
-        printf("Pre-placed rows shold be at least 2, so set to 2!\n");
-        rows = 2;
-    }
-
-    long long sum = 0;
 
     struct timeval start, end;
 
-    /*
-    gettimeofday(&start, NULL);
-    sum = serial_n_queens(N, rows);
-    gettimeofday(&end, NULL);
-    printf("serial %d queens result %lld, calc time: [%.2fms]\n", N, sum,
-           time_diff_ms(start, end));
-
-    gettimeofday(&start, NULL);
-    sum = parallel_n_queens(N, rows);
-    gettimeofday(&end, NULL);
-    printf("parallel %d queens result %lld, calc time: [%.2fms]\n", N, sum,
-           time_diff_ms(start, end));
-    */
-
     print_with_time("===============================================================\n");
     gettimeofday(&start, NULL);
-    sum = cuda_n_queens(N, rows);
+    long long sum = opencl_solve(N, preset_queens);
     gettimeofday(&end, NULL);
-    print_with_time("cuda %d queens result %lld, calc time: [%.2fms]\n", N, sum, time_diff_ms(start, end));
+    print_with_time("opencl %d queens result %lld, calc time: [%.2fms]\n",
+                    N, sum, time_diff_ms(start, end));
     print_with_time("===============================================================\n");
 
     return 0;
