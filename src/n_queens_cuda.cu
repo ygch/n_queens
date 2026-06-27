@@ -1,185 +1,221 @@
-#include <cuda_runtime.h>
-#include <omp.h>
-
-#include "macro.h"
-#include "n_queens.h"
+#include "constellation.h"
 #include "utils.h"
 
-__device__ unsigned long long global_counter = 0;
-__global__ void n_queens(int N, int *tot, long long *partial_sum, long long cnt) {
-    unsigned long long tid = atomicAdd(&global_counter, 1);
-    const int last = (1 << N) - 1;
+#include <cuda_runtime.h>
+#include <algorithm>
+#include <cstdint>
+#include <vector>
 
-    while (tid < cnt) {
-        long long sum = 0;
-        int bottom = ((threadIdx.x / 32) * 32 * STACKSIZE + threadIdx.x % 32) << 4;
-        int cur = tot[tid * 3];
-        int left = tot[tid * 3 + 1];
-        int right = tot[tid * 3 + 2];
-        int valid_pos = last & ~cur & ~left & ~right;
+#define WG_SIZE 64
 
-        if(valid_pos == 0) {
-            tid = atomicAdd(&global_counter, 1);
-            continue;
-        }
+struct Constellation4 {
+    int ld, rd, col, start_ijkl;
+};
 
-        asm(".reg .s32 top, tmp, tmp2;\n\t"
-            ".reg .s64 ltmp;\n\t"
-            ".reg .pred p, q, z;\n\t"
-            ".shared .align 16 .b8 stack[49152];\n\t"
+template <int N>
+__global__ void __launch_bounds__(WG_SIZE, 24)
+n_queens_kernel(
+    const Constellation4 * __restrict__ constellations,
+    const unsigned int * __restrict__ jkl_queens_arr,
+    long long * __restrict__ results)
+{
+    int gid = blockIdx.x * blockDim.x + threadIdx.x;
+    int lid = threadIdx.x;
 
-            " mov.u32 top, %5;\n\t"
-            " mov.u32 tmp, stack;\n\t"
-            " add.s32 %5, %5, tmp;\n\t"
-            " add.s32 top, top, tmp;\n\t"
+    Constellation4 c = constellations[gid];
 
-            " st.shared.v4.u32 [top], {%1, %2, %3, %4};\n\t"                // stack[top] = {cur, left, right, valid_pos}
-            " add.s32 top, top, 512;\n\t"                                   // top += 512
+    const unsigned int L = 1u << (N - 1);
+    unsigned int ld = (unsigned int)c.ld;
+    unsigned int rd = (unsigned int)c.rd;
+    unsigned int col = ~(L - 2) ^ (unsigned int)c.col;
+    unsigned int ld_mem = 0;
+    unsigned int rd_mem = 0;
 
-            " LOOP:\n\t"
-            " setp.eq.s32 p, top, %5;\n\t"                                  // top == bottom
-            " @p bra FINISH;\n\t"                                           // done
+    __shared__ unsigned int jkl_queens[N];
+    if (lid < N)
+        jkl_queens[lid] = jkl_queens_arr[blockIdx.x * N + lid];
+    __syncthreads();
 
-            " ld.shared.v4.u32 {%1, %2, %3, %4}, [top + -512];\n\t"         // {cur, left, right, valid_pos} = stack[top - 512]
-            " neg.s32 tmp, %4;\n\t"                                         // p = -valid_pos
-            " and.b32 tmp, %4, tmp;\n\t"                                    // p = valid_pos & (-valid_pos)
-            " sub.s32 %4, %4, tmp;\n\t"                                     // valid_pos -= p
-            " st.shared.s32 [top + -500], %4;\n\t"                          // stack[top - 500] = valid_pos
-            " setp.eq.s32 p, %4, 0;\n\t"                                    // p = (valid_pos == 0)
-            " selp.b32 tmp2, 512, 0, p;\n\t"                                // tmp = (p == 1 ? 512 : 0)
-            " sub.s32 top, top, tmp2;\n\t"                                  // top -= 512
-
-            " or.b32 %1, %1, tmp;\n\t"                                      // cur = cur | p
-            " or.b32 %2, %2, tmp;\n\t"                                      // left = left | p
-            " shl.b32 %2, %2, 1;\n\t"                                       // left = left << 1
-            " or.b32 %3, %3, tmp;\n\t"                                      // right = right | p
-            " shr.b32 %3, %3, 1;\n\t"                                       // right = right >> 1
-            " lop3.b32 tmp, %1, %2, %3, 0x1;\n\t"                           // tmp = ~cur & ~left & ~right;
-            " and.b32 %4, %6, tmp;\n\t"                                     // valid_pos = last & tmp
-            " popc.b32 tmp, %1;\n\t"                                        // tmp = popc(cur)
-            " setp.eq.s32 p, tmp, %7;\n\t"                                  // popc(cur) == N - 1
-            " setp.eq.s32 q, %4, 0;\n\t"                                    // valid_pos == 0
-            " or.pred z, p, q;\n\t"                                         // valid_pos == 0 || popc(cur) == N - 1
-
-            " popc.b32 tmp, %4;\n\t"                                        // tmp = popc(valid_pos)
-            " cvt.s64.s32 ltmp, tmp;\n\t"                                   // s32 -> s64
-            " selp.b64 ltmp, ltmp, 0, z;\n\t"                               // ltmp = (z == 1 ? ltmp : 0)
-            " add.s64 %0, %0, ltmp;\n\t"                                    // sum += popc(valid_pos)
-
-            " @!z st.shared.v4.u32 [top], {%1, %2, %3, %4};\n\t"            // stack[top] = {cur, left, right, valid_pos}
-            " selp.b32 tmp, 0, 512, z;\n\t"                                 // tmp = (z == 1 ? 0 : 512)
-            " add.s32 top, top, tmp;\n\t"                                   // top += 512
-            " bra.uni LOOP;\n\t"
-
-            " FINISH:\n\t"
-            :"+l"(sum), "+r"(cur), "+r"(left), "+r"(right), "+r"(valid_pos), "+r"(bottom)  // output
-            :"r"(last), "r"(N - 1)                                          // input
-        );
-
-        partial_sum[tid] = sum;
-        tid = atomicAdd(&global_counter, 1);
+    int start = c.start_ijkl >> 20;
+    if (start == 69) {
+        results[gid] = 0;
+        return;
     }
+
+    int k_val = (c.start_ijkl >> 5) & 31;
+    int l_val = c.start_ijkl & 31;
+    if (k_val >= start)
+        ld &= ~(L >> (k_val - start));
+    if (l_val != N - 1 && l_val >= start)
+        rd &= ~(1u << (l_val - start));
+
+    int row = start;
+    unsigned long long solutions = 0;
+
+    unsigned int free_val = ~(ld | rd | col | jkl_queens[row]);
+    unsigned int queen = (-free_val) & free_val;
+
+    __shared__ unsigned int queens[WG_SIZE][N];
+    queens[lid][start] = queen;
+
+    int direction = 0;
+
+    while (row >= start) {
+        if (free_val) {
+            if (row == N - 2) {
+                solutions++;
+                direction = 0;
+                row--;
+                queen = queens[lid][row];
+                ld = __funnelshift_r(ld, ld_mem, 1) & ~queen;
+                rd = __funnelshift_l(rd_mem, rd, 1) & ~queen;
+                ld_mem >>= 1;
+                rd_mem <<= 1;
+            } else {
+                direction = 1;
+                queen = (-free_val) & free_val;
+                queens[lid][row] = queen;
+                row++;
+                ld_mem = __funnelshift_l(ld, ld_mem, 1);
+                rd_mem = __funnelshift_r(rd_mem, rd, 1);
+                ld = (ld | queen) << 1;
+                rd = (rd | queen) >> 1;
+            }
+        } else {
+            direction = 0;
+            row--;
+            queen = queens[lid][row];
+            ld = __funnelshift_r(ld, ld_mem, 1) & ~queen;
+            rd = __funnelshift_l(rd_mem, rd, 1) & ~queen;
+            ld_mem >>= 1;
+            rd_mem <<= 1;
+        }
+        free_val = ~(jkl_queens[row] | ld | rd | col);
+        free_val &= ~(queen + direction - 1);
+        col ^= queen;
+    }
+    results[gid] = (long long)solutions;
 }
 
-long long cuda_n_queens(int N, int rows) {
-    struct timeval start, end;
-    long long sum = 0;
-    vector<int> tot;
+static void sortByJkl(std::vector<Constellation> &consts) {
+    std::sort(consts.begin(), consts.end(), [](const Constellation &a, const Constellation &b) {
+        return getJkl(a.start_ijkl) < getJkl(b.start_ijkl);
+    });
+}
 
-    // 1. get total subproblems.
-    gettimeofday(&start, NULL);
-    partial_n_queens(N, 0, 0, 0, tot, rows);
+static void padWithPseudo(std::vector<Constellation> &consts, int n, int wgSize) {
+    sortByJkl(consts);
+    std::vector<Constellation> padded;
+    int allOnes = (1 << n) - 1;
+    int currentJkl = getJkl(consts[0].start_ijkl);
+    for (auto &c : consts) {
+        if (getJkl(c.start_ijkl) != currentJkl) {
+            while (padded.size() % wgSize != 0)
+                padded.push_back({allOnes, allOnes, allOnes, (69 << 20), -2});
+            currentJkl = getJkl(c.start_ijkl);
+        }
+        padded.push_back(c);
+    }
+    while (padded.size() % wgSize != 0)
+        padded.push_back({allOnes, allOnes, allOnes, (69 << 20), -2});
+    consts = std::move(padded);
+}
 
-    if (N & 0x1) {
-        partial_n_queens_for_odd(N, 0, 0, 0, tot, rows);
+#define LAUNCH_N(n_val) \
+    case n_val: { \
+        cudaFuncSetAttribute(n_queens_kernel<n_val>, \
+            cudaFuncAttributePreferredSharedMemoryCarveout, \
+            cudaSharedmemCarveoutMaxShared); \
+        n_queens_kernel<n_val><<<numWg, WG_SIZE>>>(d_const, d_jkl, d_results); \
+        break; \
     }
 
-    long long cnt = tot.size() / 3;
-    vector<long long> partial_sum(cnt);
-    gettimeofday(&end, NULL);
+long long cuda_solve(int n, int preset_queens) {
+    struct timeval t0, t1;
+    gettimeofday(&t0, NULL);
 
-    print_with_time("Use %.2fms to generate %lld subproblems!\n", time_diff_ms(start, end), cnt);
+    auto constellations = generate_constellations(n, preset_queens);
+    gettimeofday(&t1, NULL);
+    print_with_time("Constellation generation: %.2fms, %zu subproblems\n",
+                    time_diff_ms(t0, t1), constellations.size());
 
-    int gpu_num = 0;
-    cudaGetDeviceCount(&gpu_num);
-    if (gpu_num == 0) {
-        printf("Failed to find any gpu!\n");
-        return -1;
+    if (constellations.empty()) {
+        print_with_time("No subproblems generated!\n");
+        return 0;
     }
 
-    // 2. divide total subproblems to different trunks
-    vector<long long> new_cnt(gpu_num), start_pos(gpu_num);
-    long long total = 0;
-    if (gpu_num == 8) {
-        float ratio[8] = {0.20, 0.15, 0.12, 0.11, 0.11, 0.11, 0.10, 0.10};
-        for (int i = 0; i < gpu_num - 1; i++) {
-            new_cnt[i] = cnt * ratio[i];
-            start_pos[i] = total;
-            total += new_cnt[i];
-        }
-    } else if (gpu_num == 4) {
-        float ratio[4] = {0.35, 0.23, 0.22, 0.2};
-        for (int i = 0; i < gpu_num - 1; i++) {
-            new_cnt[i] = cnt * ratio[i];
-            start_pos[i] = total;
-            total += new_cnt[i];
-        }
-    } else if (gpu_num == 2) {
-        float ratio[2] = {0.58, 0.42};
-        for (int i = 0; i < gpu_num - 1; i++) {
-            new_cnt[i] = cnt * ratio[i];
-            start_pos[i] = total;
-            total += new_cnt[i];
-        }
-    } else {
-        long long partial_cnt = cnt / gpu_num;
-        for (int i = 0; i < gpu_num - 1; i++) {
-            new_cnt[i] = partial_cnt;
-            start_pos[i] = total;
-            total += partial_cnt;
-        }
-    }
-    new_cnt[gpu_num - 1] = cnt - total;
-    start_pos[gpu_num - 1] = total;
+    padWithPseudo(constellations, n, WG_SIZE);
+    long long cnt = constellations.size();
+    int numWg = cnt / WG_SIZE;
 
-    // 3. use different gpu to process each trunk
-#pragma omp parallel num_threads(gpu_num)
-    {
-        int idx = omp_get_thread_num();
-        CU_SAFE_CALL(cudaSetDevice(idx));
+    print_with_time("Total constellations (padded): %lld, workgroups: %d\n", cnt, numWg);
 
-        long long total = cnt;
-        long long cnt = new_cnt[idx];
-
-        print_with_time("gpu [%d] start job, with %lld(%.2f) subproblems.\n", idx, cnt, cnt * 1.0 / total);
-
-        int *cuda_tot;
-        CU_SAFE_CALL(cudaMalloc(&cuda_tot, sizeof(int) * cnt * 3));
-        CU_SAFE_CALL(cudaMemcpy(cuda_tot, tot.data() + start_pos[idx] * 3, sizeof(int) * cnt * 3, cudaMemcpyHostToDevice));
-
-        long long *cuda_partial_sum;
-        CU_SAFE_CALL(cudaMalloc(&cuda_partial_sum, sizeof(long long) * cnt));
-        CU_SAFE_CALL(cudaMemset(cuda_partial_sum, 0, sizeof(long long) * cnt));
-
-        dim3 dimBlock(CU1DBLOCK);
-        dim3 dimGrid(1024);
-
-        n_queens<<<dimGrid, dimBlock>>>(N, cuda_tot, cuda_partial_sum, cnt);
-
-        cudaError_t err = cudaDeviceSynchronize();
-        if (err != cudaSuccess) {
-            printf("kernel error: %s\n", cudaGetErrorString(err));
-        }
-
-        CU_SAFE_CALL(cudaMemcpy(partial_sum.data() + start_pos[idx], cuda_partial_sum, sizeof(long long) * cnt, cudaMemcpyDeviceToHost));
-
-        CU_SAFE_CALL(cudaFree(cuda_tot));
-        CU_SAFE_CALL(cudaFree(cuda_partial_sum));
-        print_with_time("gpu [%d] finish job.\n", idx);
+    unsigned int L = 1u << (n - 1);
+    std::vector<uint32_t> jkl_queens_arr(numWg * n, 0);
+    for (int wg = 0; wg < numWg; wg++) {
+        int ijkl = constellations[wg * WG_SIZE].start_ijkl & 0xFFFFF;
+        int j = getj(ijkl), k = getk(ijkl), l = getl(ijkl);
+        unsigned int rdiag = (L >> j) | (L >> (n - 1 - k));
+        unsigned int ldiag = (L >> j) | (L >> l);
+        for (int row = 0; row < n; row++)
+            jkl_queens_arr[wg * n + (n - 1 - row)] = (ldiag >> row) | (rdiag << row) | L | 1;
+        ldiag = L >> k;
+        rdiag = 1u << l;
+        for (int row = 0; row < n; row++)
+            jkl_queens_arr[wg * n + row] |= (ldiag << row) | (rdiag >> row);
+        jkl_queens_arr[wg * n + k] = ~L;
+        jkl_queens_arr[wg * n + l] = ~1u;
     }
 
+    std::vector<Constellation4> const_data(cnt);
     for (long long i = 0; i < cnt; i++) {
-        sum += partial_sum[i] * 2;
+        const_data[i] = {constellations[i].ld, constellations[i].rd,
+                         constellations[i].col, constellations[i].start_ijkl};
+    }
+
+    Constellation4 *d_const;
+    unsigned int *d_jkl;
+    long long *d_results;
+    cudaMalloc(&d_const, cnt * sizeof(Constellation4));
+    cudaMalloc(&d_jkl, numWg * n * sizeof(unsigned int));
+    cudaMalloc(&d_results, cnt * sizeof(long long));
+
+    cudaMemcpy(d_const, const_data.data(), cnt * sizeof(Constellation4), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_jkl, jkl_queens_arr.data(), numWg * n * sizeof(unsigned int), cudaMemcpyHostToDevice);
+    cudaMemset(d_results, 0, cnt * sizeof(long long));
+
+    gettimeofday(&t0, NULL);
+    switch (n) {
+        LAUNCH_N(6)  LAUNCH_N(7)  LAUNCH_N(8)  LAUNCH_N(9)  LAUNCH_N(10)
+        LAUNCH_N(11) LAUNCH_N(12) LAUNCH_N(13) LAUNCH_N(14) LAUNCH_N(15)
+        LAUNCH_N(16) LAUNCH_N(17) LAUNCH_N(18) LAUNCH_N(19) LAUNCH_N(20)
+        LAUNCH_N(21) LAUNCH_N(22) LAUNCH_N(23) LAUNCH_N(24) LAUNCH_N(25)
+        LAUNCH_N(26) LAUNCH_N(27) LAUNCH_N(28)
+        default:
+            print_with_time("Unsupported N: %d\n", n);
+            cudaFree(d_const); cudaFree(d_jkl); cudaFree(d_results);
+            return -1;
+    }
+    cudaError_t err = cudaDeviceSynchronize();
+    gettimeofday(&t1, NULL);
+    if (err != cudaSuccess) {
+        print_with_time("CUDA kernel error: %s\n", cudaGetErrorString(err));
+    }
+    print_with_time("CUDA kernel time: %.2fms\n", time_diff_ms(t0, t1));
+
+    std::vector<long long> results(cnt);
+    cudaMemcpy(results.data(), d_results, cnt * sizeof(long long), cudaMemcpyDeviceToHost);
+
+    cudaFree(d_const);
+    cudaFree(d_jkl);
+    cudaFree(d_results);
+
+    long long sum = 0;
+    for (long long i = 0; i < cnt; i++) {
+        if (constellations[i].start_ijkl >> 20 == 69)
+            continue;
+        int ijkl = constellations[i].start_ijkl & 0xFFFFF;
+        sum += results[i] * symmetry(n, ijkl);
     }
 
     return sum;

@@ -28,9 +28,9 @@ int main(int argc, char *argv[]) {
 
     print_with_time("===============================================================\n");
     gettimeofday(&start, NULL);
-    long long sum = opencl_solve(N, preset_queens);
+    long long sum = cuda_solve(N, preset_queens);
     gettimeofday(&end, NULL);
-    print_with_time("opencl %d queens result %lld, calc time: [%.2fms]\n",
+    print_with_time("cuda %d queens result %lld, calc time: [%.2fms]\n",
                     N, sum, time_diff_ms(start, end));
     print_with_time("===============================================================\n");
 
