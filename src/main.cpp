@@ -1,3 +1,15 @@
+// =============================================================================
+// main.cpp — 命令行入口
+//
+// 用法: ./n_queens <N> [preset_queens]
+//   N: 棋盘大小，范围 [6, 28]
+//   preset_queens: CPU预设皇后数，默认6，范围 [4, N-2]
+//
+// 示例:
+//   ./n_queens 20        # N=20, preset_queens=6
+//   ./n_queens 20 7      # N=20, preset_queens=7
+// =============================================================================
+
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -5,6 +17,7 @@
 #include "utils.h"
 
 int main(int argc, char *argv[]) {
+    // 解析命令行参数
     if (argc < 2) {
         printf("Usage: %s <N> [preset_queens]\n", argv[0]);
         return -1;
@@ -24,6 +37,7 @@ int main(int argc, char *argv[]) {
         return -1;
     }
 
+    // 调用CUDA求解器，计时并打印结果
     struct timeval start, end;
 
     print_with_time("===============================================================\n");
