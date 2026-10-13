@@ -573,6 +573,22 @@ Sensitivity: at 93KB effective smem the counts become reload 9/8/8/8/7 and captu
 
 Single-4090 absolute extrapolation (x9.1 per +1N, anchors at 23: reload 1352.4s / capture 1469.7s): 24 ~3.4h/3.7h; 25 ~1.3d/1.4d; 26 ~12d/13d; 27 ~107d/116d; 28 ~2.7y/2.9y (~2.5-3 months on 8x5090). **All unvalidated**; one N=24 reload run (~3.4h, predicted ~12.3ks) checks the whole ladder; full A/B ~7h.
 
+## Attempt #37: warp-scaling law measured in the low-residency regime (NQ_WG squeeze, 2026-10-13)
+
+Motive (answering "N=23 is already measured - is N=24 still needed?"): the only mechanism-level extrapolation in the 24-28 projection was "fewer resident warps at larger N (9-10 -> 7-8): does per-warp throughput hold?". An N=24 run does not cover it either (still the 9-block rung); but NQ_WG can squeeze N=21 (same work, same kernel, packing only) onto those rungs directly.
+
+Measured (N=21 reload, same session, kernel time):
+
+| WG | resident | warps/SM | measured | flat-rate prediction (T32*11/W) | ratio |
+|---|---|---|---|---|---|
+| 32 | 11x1 | 11 | 16275.5 ms | - (baseline) | 1.000 |
+| 96 | 3x3 | 9 | 19548.6 ms | 19892 ms | **0.983** |
+| 128 | 2x4 | **8** | 21972.1 ms | 22379 ms | **0.982** |
+
+Verdict: **per-warp throughput is flat (even +1.7%) across 8-11 warps - no latency-hiding cliff.** The 8/7-warp rungs the reload naturally lands on at 26-28 are now directly evidenced; the last extrapolated mechanism in the #36 table is closed (worst case N=28 at 93KB/7 blocks -> ~0.95). This measures the scaling law (warps->time); kappa itself (~3.85) rests on the 21/22/23 blind test.
+
+**Is N=24 still needed?** No longer a necessity for the conclusion: exact maxd (verified at 22/23) + the N=23 blind hit (0.2%) + today's measured scaling law cover the model. N=24's remaining value: (1) pre-N=28-launch sanity check (insurance, not required); (2) re-anchor the x9.1/N growth step once more; (3) a measured "capture@24" number for the paper/record if wanted.
+
 ## Measured Optimization Space Map (2026-10)
 
 An instrumented campaign (per-thread iteration counters, warp-level analysis, occupancy queries, SASS dumps) bounded what remains after #12:
