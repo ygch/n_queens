@@ -611,6 +611,24 @@ Law check (paper-line 8x5090 measured time ratios vs exact solution ratios):
 
 **Correction to #36**: the flat x9.1/N extrapolation understated 26-28 (solution ratios rise to 10.1-10.9); N=28 on 1x4090 goes from "2.7y" to ~5.0-5.8y. Also: the paper itself notes load balancing is not optimal at large N (5-day GPU finish spread in the 27 run); fixing it saves ~10% more.
 
+## Attempt #39: Static vs dynamic shared memory (equal-size isolation A/B, 2026-10-13)
+
+Motive (user question): the paper (main line) found static shared memory faster than dynamic, while the reload line uses dynamic - run an equal-byte-size isolation experiment (residency eliminated; only "compile-time static size vs extern dynamic base" differs).
+
+Method: reload kernel changed to `__shared__ int4 stk[(WGW/32)*(N-4)*32]` - with preset=6, maxd=N-4 is known (verified), so the static size is exactly equal to the dynamic allocation's bytes; launch passes no dynamic smem; a host assertion `maxd <= N-4` guards preset!=6. N=20/21/22 x WG32/64/128, interleaved A/B, 2 runs each:
+
+| config | dynamic (production) | static (experiment) | delta |
+|---|---|---|---|
+| 21@WG32 (11 warps) | 16299.6 ms | 16292.1 ms | -0.05% |
+| 21@WG64 (10 warps) | 17271.5 ms | 17283.8 ms | +0.07% |
+| 20@WG128 (12 warps) | 1986.1 ms | 1985.6 ms | -0.02% |
+
+(Counts exact on both: 314666222712 / 39029188884.)
+
+**Verdict: completely insensitive (+-0.1%, within noise).** The static/dynamic difference is a one-time base materialization; irrelevant to the reload's LDS-dependency bottleneck. The paper's "static faster" was specific to the main-line row-stack configs (its dynamic side also varied carveout/L1 and block size); the reload's earlier "static-19 -> exact-depth dynamic = -16% @N22" win came entirely from **resident block count** (19.5 -> 18.5KB crossing 4->5 blocks), not the allocation mechanism - this experiment closes the loop.
+
+Engineering call: **production stays dynamic** (static deployment would need per-(N,WG) instantiations, 3x instantiation count, and hits the 48KB static cap at large N - for zero gain).
+
 ## Measured Optimization Space Map (2026-10)
 
 An instrumented campaign (per-thread iteration counters, warp-level analysis, occupancy queries, SASS dumps) bounded what remains after #12:
