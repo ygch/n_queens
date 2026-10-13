@@ -553,6 +553,26 @@ Full re-verification of faf-cuda (original capture port) after the branch split 
 
 Verdict: the capture baseline is **fully reproducible** (N=20/21 are the hardest anchors, within 0.5%); faf-cuda is valid as the frozen capture reference.
 
+## Attempt #36: N=24-28 branch comparison projection (exact maxd + kappa extrapolation vs the frozen capture line, 2026-10-13)
+
+Refines the #25 kappa model for faf-cuda-reload (reload) vs faf-cuda (pristine capture): exact stack depths + the #35 correction that pristine `queens[64][N]` gives the capture more resident warps than the evolved `queens[128][N]` build.
+
+Exact maxd (host program over real subproblems, same convention as host Step 3.6): **maxd = N-4** for N=22..28 (18/19/20/21/22/23/24; N=22 matches the measured 18; min_start=3, max_start=5 constant).
+
+Projection (96KB effective smem; reload WG32 = 512B*maxd/block, capture WG64 = 260B*N/block; kappa=3.85):
+
+| N | reload resident warps | capture resident warps | W_r*kappa | predicted T_r/T_c |
+|---|---|---|---|---|
+| 24 | 9 | 30 | 34.7 | 0.87 (-13%) |
+| 25 | 9 | 30 | 34.7 | 0.87 (-13%) |
+| 26 | 8 | 28 | 30.8 | 0.91 (-9%) |
+| 27 | 8 | 28 | 30.8 | 0.91 (-9%) |
+| 28 | 8 | 26 | 30.8 | 0.84 (-16%) |
+
+Sensitivity: at 93KB effective smem the counts become reload 9/8/8/8/7 and capture 30/28/28/26/26 -> ratios 0.87/0.91/0.91/0.84/0.97: **reload leads at every N by -3% to -16% (median ~-10%)**. N=28 sits exactly on the reload 8->7 block boundary (worst case ~tie; WG64 is then equivalent, sweep it if validating).
+
+Single-4090 absolute extrapolation (x9.1 per +1N, anchors at 23: reload 1352.4s / capture 1469.7s): 24 ~3.4h/3.7h; 25 ~1.3d/1.4d; 26 ~12d/13d; 27 ~107d/116d; 28 ~2.7y/2.9y (~2.5-3 months on 8x5090). **All unvalidated**; one N=24 reload run (~3.4h, predicted ~12.3ks) checks the whole ladder; full A/B ~7h.
+
 ## Measured Optimization Space Map (2026-10)
 
 An instrumented campaign (per-thread iteration counters, warp-level analysis, occupancy queries, SASS dumps) bounded what remains after #12:
