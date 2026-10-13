@@ -534,6 +534,25 @@ Actions:
 
 Validation (new branch production build): counts exact N=6-22 (N=6/7 need preset 4/5); N=20 = 2150.2ms, N=21 = 16.47s, N=22 = 147.95s - no regression vs v4-mid-block production (22 slightly faster than the 149.1s record).
 
+## Attempt #35: Performance reproduction of the frozen faf-cuda line (2026-10-13)
+
+Full re-verification of faf-cuda (original capture port) after the branch split (#34): build, counts and **performance**.
+
+**Metric note: `CUDA kernel time:` = kernel only; the trailing `calc time` = end-to-end (includes CPU constellation generation/sort/transfer, dominant at small N). Historical tables (e.g. #12) list kernel times.**
+
+| N | faf-cuda kernel time today (2 runs) | historical record (capture) | delta |
+|---|---|---|---|
+| 16 | 1.45 / 1.40 ms | 1.29 ms | +9-12% (abs <0.2ms, noise level) |
+| 18 | 44.01 / 43.59 ms | 42.0 ms | +4% |
+| 20 | **2293.0 / 2297.9 ms** | **2295 ms** | **+-0.1%** |
+| 21 | 18610.4 ms | 18703 ms | -0.5% |
+| 22 | **157.1 s** | 162.5 s | **-3.3%** (pristine slightly faster) |
+
+- The 162.0-162.5s N=22 records came mostly from later builds (static `queens[MAX_WG=128][N]`, halved residency at WG64); the pristine build is hence slightly faster. Same-metric (end-to-end) today: reload@22 = 147.95s vs pristine capture 157.48s = **-6.1%** (the same-build A/B figure of -8.1% (149.1 vs 162.2) had the evolved capture penalty on the capture side).
+- Small-N deltas (16/18) are sub-2ms jitter.
+
+Verdict: the capture baseline is **fully reproducible** (N=20/21 are the hardest anchors, within 0.5%); faf-cuda is valid as the frozen capture reference.
+
 ## Measured Optimization Space Map (2026-10)
 
 An instrumented campaign (per-thread iteration counters, warp-level analysis, occupancy queries, SASS dumps) bounded what remains after #12:
