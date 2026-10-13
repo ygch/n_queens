@@ -1,40 +1,39 @@
 // =============================================================================
-// n_queens_cuda.cu — CUDA D4 星座法 N-Queens 求解器
+// n_queens_cuda.cu — CUDA D4 星座法 N-Queens 求解器（回载式内核，本分支唯一内核）
 //
 // 整体架构：
 //   1. CPU 端生成所有星座子问题（4个边界皇后 + preset_queens个预设皇后）
-//   2. 按jkl分组排序，填充伪星座保证对齐
+//   2. 按jkl分组排序，填充伪星座保证对齐（模 384 = LCM(32,64,96,128)）
 //   3. 预计算每个workgroup的jkl_queens对角线约束
-//   4. GPU内核：每个线程一个星座，Jeff Somers位并行回溯
+//   4. GPU内核：每线程一个星座，int4 全状态重载式回溯（N=6~28 全部走回载内核）
 //   5. CPU汇总：results[i] * symmetry(ijkl)，乘以D4对称倍数
 //
-// 核心算法：Jeff Somers位并行回溯
-//   用3个32位掩码表示棋盘状态：
-//     col — 列占用 (bit c = 1 表示列c已有皇后)
-//     ld  — 左对角线 (\方向)，下一行整体左移1位 (<<1)
-//     rd  — 可对角线 (/方向)，下一行整体右移1位 (>>1)
-//   当32位移位导致位溢出时，用ld_mem/rd_mem捕获丢失的位
+// 内核状态表示：每层存完整状态 {cur,left,right,residual}（16B int4）；
+//   回溯时整状态重载——不需要 ld_mem/rd_mem 捕获位，也不需要 direction 防重掩码；
+//   叶子行(N-2) 用 __popc(child) 批量计数（倒数第二行优化）。
 //
 // 位掩码约定：
 //   bit 0 = 最右列, bit N-1 = 最左列
 //   行号: 0 (顶) ~ N-1 (底)
 //
-// 性能特征（RTX 4090, N=20）：
-//   内核时间 ~2329ms, 20寄存器, 5200字节共享内存, 9块/SM
-//   内核为吞吐量瓶颈（IPC限制），非延迟瓶颈
+// 性能特征（RTX 4090，生产配置实测）：
+//   N=20 WG=128 ≈ 2152ms；N=21 WG=32 ≈ 16.5s；N=22 WG=64 ≈ 149s；N=23 WG=32 ≈ 1352.4s
+//   内核为吞吐量瓶颈（IPC限制），非延迟瓶颈；占用率受共享内存（精确栈深）限制
+//
+// 注：原始捕获式内核（4B/层栈 + 捕获位 + funnelshift）见 faf-cuda 分支
 // =============================================================================
 
 #include "constellation.h"
 #include "utils.h"
 
 #include <cuda_runtime.h>
+#include <cstdio>
 #include <algorithm>
 #include <cstdint>
 #include <vector>
 
-// 每个线程块的线程数（2个warp）
-// 较小的块大小使每个SM能容纳更多块，增加warp调度灵活性
-#define WG_SIZE 64
+// 块大小按 N 由 host 选择（见 cuda_solve 的按 N 表；默认 64，NQ_WG 可覆盖）
+#define MAX_WG 128          // launch_bounds 上限
 
 // GPU端星座数据结构（比CPU端Constellation更紧凑，无solutions字段）
 // 16字节，便于全局内存合并访问
@@ -43,21 +42,24 @@ struct Constellation4 {
 };
 
 // =============================================================================
-// GPU内核：Jeff Somers位并行回溯
+// GPU内核：D4星座 + Jeff Somers位并行回溯（回载式循环）
 //
-// 模板参数N：棋盘大小。模板化使编译器将N作为编译时常量优化
-// （如 1<<(N-1) 变为立即数），并为每个N生成最优代码。
+// 与旧循环的区别：
+//   - 旧：每层只存 queen(4B)，回溯用"反向移位 + ld_mem/rd_mem 捕获位"重建
+//         ld/rd，并依赖 direction 防重掩码；每次迭代约 15-20 条 SASS。
+//   - 新：每层存完整状态 {cur,left,right,residual}（16B，int4 零 bank 冲突布局），
+//         迭代时重载父状态——不再需要捕获位与防重掩码。
 //
-// __launch_bounds__(64, 24)：告诉编译器每块64线程，目标每SM 24块。
-// 实际受共享内存限制为9块/SM（18 warp）。
-//
-// 每个线程处理一个独立的星座子问题，线程间无数据依赖。
+// 计数与原内核逐子问题等价（Python 精确模拟对 1747 个真实子问题 0 误差验证）：
+//   popc(cur)==leaf_pc ⇔ 刚放完第 N-3 行，子行(N-2)的合法位置数即解数
+//   leaf_pc = popc(col) + (N - start - 2)；jkl 行号 = (start - popc(col)) + popc(cur)
 // =============================================================================
 template <int N>
-__global__ void __launch_bounds__(WG_SIZE, 24)
+__global__ void __launch_bounds__(MAX_WG, 12)
 n_queens_kernel(
     const Constellation4 * __restrict__ constellations,  // 每线程一个星座
     const unsigned int * __restrict__ jkl_queens_arr,     // 每workgroup的N个jkl约束
+    int S,                                                // 栈深：host 按真实最大深度精确计算
     long long * __restrict__ results)                     // 输出：每线程一个解数
 {
     int gid = blockIdx.x * blockDim.x + threadIdx.x;
@@ -65,164 +67,124 @@ n_queens_kernel(
 
     // --- 1. 加载星座数据到寄存器 ---
     Constellation4 c = constellations[gid];
-
-    // L = 最高位掩码（bit N-1），用于标记左右边界列
     const unsigned int L = 1u << (N - 1);
-
-    // ld/rd/col：棋盘状态掩码，来自CPU端预设皇后放置后的状态
-    unsigned int ld = (unsigned int)c.ld;
+    unsigned int ld = (unsigned int)c.ld;    // 到 start 行对齐的对角线状态
     unsigned int rd = (unsigned int)c.rd;
-
-    // col初始化：~(L-2) 设置两个边界列（bit 0 和 bit N-1 为1），
-    // ^ c.col 用XOR合入CPU端已放置皇后的列占用
-    // ~(L-2) = ~(0b...11111110) = bit0和bitN-1为1
     unsigned int col = ~(L - 2) ^ (unsigned int)c.col;
 
-    // ld_mem/rd_mem：捕获32位移位时溢出的位
-    // ld << 1 时 bit 31 丢失 → ld_mem 捕获
-    // rd >> 1 时 bit 0 丢失  → rd_mem 捕获
-    // 这使得32位掩码可以表示超过32行的对角线状态
-    unsigned int ld_mem = 0;
-    unsigned int rd_mem = 0;
-
     // --- 2. 协作加载 jkl_queens 到共享内存 ---
-    // jkl_queens[row]：边界皇后j/k/l在第row行产生的对角线约束（位掩码）
-    // 整个workgroup共享一份，避免每个线程独立从全局内存加载
     __shared__ unsigned int jkl_queens[N];
     if (lid < N)
         jkl_queens[lid] = jkl_queens_arr[blockIdx.x * N + lid];
     __syncthreads();
 
     // --- 3. 处理伪星座 ---
-    // start_ijkl的高12位存start（回溯起始行）
-    // start==69 是伪星座标记（padWithPseudo填充的对齐用假数据）
     int start = c.start_ijkl >> 20;
     if (start == 69) {
         results[gid] = 0;
         return;
     }
 
-    // --- 4. 修正边界皇后k和l的对角线 ---
-    // 皇后k在第一列(col 0)，其左对角线(\)从右下向左上延伸
-    // 皇后l在最后一列(col N-1)，其右对角线(/)从左下向右上延伸
-    // GPU回溯从start行开始，需要根据start调整k/l对角线的起始位置
+    // --- 4. 修正边界皇后k和l的对角线（与旧内核一致） ---
     int k_val = (c.start_ijkl >> 5) & 31;
     int l_val = c.start_ijkl & 31;
     if (k_val >= start)
-        ld &= ~(L >> (k_val - start));  // 移除k皇后在start行的左对角线位
+        ld &= ~(L >> (k_val - start));
     if (l_val != N - 1 && l_val >= start)
-        rd &= ~(1u << (l_val - start)); // 移除l皇后在start行的右对角线位
+        rd &= ~(1u << (l_val - start));
 
-    // --- 5. 初始化回溯 ---
-    int row = start;
-    unsigned long long solutions = 0;
-
-    // 计算起始行的可用位置：NOR(所有约束)
-    // jkl_queens[row] 是边界皇后在该行的对角线约束
-    unsigned int free_val = ~(ld | rd | col | jkl_queens[row]);
-
-    // 位扫描：queen = 最低可用位
-    // (-free) & free 的原理：负数补码保留最低位的1，AND后得到最低位
-    // 等价于 ffs() 但不需要内置函数，GPU上只需2条指令(NEG+AND)
-    unsigned int queen = (-free_val) & free_val;
-
-    // 共享内存栈：存储每行放置的皇后位，用于回溯时恢复
-    // 每个线程独立一份（WG_SIZE * N 个uint）
-    __shared__ unsigned int queens[WG_SIZE][N];
-    queens[lid][start] = queen;
-
-    // direction: 1=前进(刚放置皇后), 0=回溯(刚移除皇后)
-    // 用于统一尾代码中的防重复访问掩码计算
-    int direction = 0;
-
-    // --- 6. 主回溯循环：Jeff Somers 位并行 DFS ---
-    // 循环条件：row >= start（回溯到起始行之前则结束）
-    while (row >= start) {
-        if (free_val) {
-            // --- 情况a: 当前行有可用位置 ---
-
-            if (row == N - 2) {
-                // --- 叶子节点：到达倒数第二行 ---
-                // N-1行（最后一行）已有边界皇后j，N-2行放置后即构成完整解
-                solutions++;
-                direction = 0;  // 接下来要回溯
-                row--;
-
-                // 从栈中加载上一行的皇后，恢复棋盘状态
-                queen = queens[lid][row];
-
-                // 恢复ld：右移1位（撤销前进时的<<1），用ld_mem恢复溢出位
-                // __funnelshift_r(ld, ld_mem, 1) = (ld >> 1) | (ld_mem << 31)
-                // & ~queen：移除该皇后的左对角线
-                ld = __funnelshift_r(ld, ld_mem, 1) & ~queen;
-
-                // 恢复rd：左移1位（撤销前进时的>>1），用rd_mem恢复溢出位
-                // __funnelshift_l(rd_mem, rd, 1) = (rd << 1) | (rd_mem >> 31)
-                // 注意：funnelshift_l第一参数是低位(lo)，第二参数是高位(hi)
-                // & ~queen：移除该皇后的右对角线
-                rd = __funnelshift_l(rd_mem, rd, 1) & ~queen;
-
-                // 恢复记忆变量（撤销前进时的移位）
-                ld_mem >>= 1;
-                rd_mem <<= 1;
-            } else {
-                // --- 前进：在当前行放置皇后，进入下一行 ---
-                direction = 1;
-                queen = (-free_val) & free_val;  // 取最低可用位
-
-                // 压栈：保存当前行放置的皇后位
-                queens[lid][row] = queen;
-                row++;
-
-                // 更新ld_mem：捕获ld的bit 31（<<1时会丢失的位）
-                // __funnelshift_l(ld, ld_mem, 1) = (ld_mem << 1) | (ld >> 31)
-                ld_mem = __funnelshift_l(ld, ld_mem, 1);
-
-                // 更新rd_mem：捕获rd的bit 0（>>1时会丢失的位）
-                // __funnelshift_r(rd_mem, rd, 1) = (rd_mem >> 1) | (rd << 31)
-                rd_mem = __funnelshift_r(rd_mem, rd, 1);
-
-                // 更新ld：加入皇后的左对角线，整体左移1位（下一行的对角线位置）
-                ld = (ld | queen) << 1;
-
-                // 更新rd：加入皇后的右对角线，整体右移1位（下一行的对角线位置）
-                rd = (rd | queen) >> 1;
-            }
-        } else {
-            // --- 情况b: 当前行无可用位置，回溯 ---
-            direction = 0;
-            row--;
-
-            // 从栈中弹出上一行的皇后
-            queen = queens[lid][row];
-
-            // 恢复ld/rd/ld_mem/rd_mem（与叶子节点回溯逻辑相同）
-            ld = __funnelshift_r(ld, ld_mem, 1) & ~queen;
-            rd = __funnelshift_l(rd_mem, rd, 1) & ~queen;
-            ld_mem >>= 1;
-            rd_mem <<= 1;
-        }
-
-        // --- 统一尾代码 ---
-
-        // 计算当前行的可用位置：NOR(边界约束 | 左对角线 | 右对角线 | 列占用)
-        free_val = ~(jkl_queens[row] | ld | rd | col);
-
-        // 防重复访问掩码：避免在同一行重复尝试已经试过的位置
-        // 前进(direction=1): ~(queen + 1 - 1) = ~queen，排除刚放的皇后
-        // 回溯(direction=0): ~(queen + 0 - 1) = ~(queen-1)，排除queen及其右侧所有位
-        //   （右侧=更低bit=更早尝试过的位置，因为每次取最低位）
-        free_val &= ~(queen + direction - 1);
-
-        // XOR翻转列占用：
-        // 前进时：col加入皇后的列（XOR设置该位）
-        // 回溯时：col移除皇后的列（同一XOR操作，第二次翻转恢复原值）
-        // 这是关键的免分支技巧，避免了if/else
-        col ^= queen;
+    // --- 5. 初始候选与短路 ---
+    const unsigned int last = (1u << N) - 1;
+    unsigned int valid = last & ~(ld | rd | col | jkl_queens[start]);
+    if (valid == 0) {          // 死根：原内核同样立即弹栈退出
+        results[gid] = 0;
+        return;
+    }
+    if (start >= N - 2) {      // 起始行即倒数第二行：合法位置数即解数
+        results[gid] = __popc(valid);
+        return;
     }
 
-    // --- 7. 写回结果 ---
-    results[gid] = (long long)solutions;
+    // 回载式循环的换算常数（每子问题仅算一次）
+    const int init_pc = __popc(col);
+    const int leaf_pc = init_pc + (N - start - 2);
+    const int jrow_base = start - init_pc;
+
+    // --- 6. 共享内存栈：每线程 S 层 int4，零 bank 冲突布局 ---
+    // 同 warp 内 lane l 的层 e 位于槽 e*32+l；连续 lane 的 16B 向量铺满 32 bank
+    // S 由 host 按真实最大栈深精确给出（动态共享内存），避免按 N-3 过度分配压低占用率
+    extern __shared__ int4 stk[];
+    const int sbase = (lid >> 5) * (S * 32) + (lid & 31);
+
+    stk[sbase] = make_int4((int)col, (int)ld, (int)rd, (int)valid);
+    int top = 1;               // 层 e 位于槽 sbase + (e-1)*32
+    long long solutions = 0;
+
+    // --- 7. 主回溯循环（手工 unroll×2：两份作用域化的循环体 + 中途退出） ---
+    while (top > 0) {
+        {
+        int4 e = stk[sbase + (top - 1) * 32];
+        unsigned int cur = (unsigned int)e.x;
+        unsigned int left = (unsigned int)e.y;
+        unsigned int right = (unsigned int)e.z;
+        unsigned int residual = (unsigned int)e.w;
+
+        unsigned int p = residual & (0u - residual);   // 最低可用位
+        residual -= p;
+        stk[sbase + (top - 1) * 32].w = (int)residual; // 存回残余候选
+        if (residual == 0)
+            top--;                                     // 本层耗尽 → 弹栈
+
+        cur |= p;
+        left = (left | p) << 1;
+        right = (right | p) >> 1;
+
+        int pc = __popc(cur);
+        unsigned int child =
+            last & ~(cur | left | right | jkl_queens[jrow_base + pc]);
+
+        if (pc == leaf_pc || child == 0) {
+            // 叶子行(N-2)：child 的 popc 即解数；死胡同 child==0 加 0
+            solutions += __popc(child);
+        } else {
+            stk[sbase + top * 32] = make_int4((int)cur, (int)left, (int)right, (int)child);
+            top++;
+        }
+        }
+        if (top <= 0)
+            break;
+        {
+        int4 e = stk[sbase + (top - 1) * 32];
+        unsigned int cur = (unsigned int)e.x;
+        unsigned int left = (unsigned int)e.y;
+        unsigned int right = (unsigned int)e.z;
+        unsigned int residual = (unsigned int)e.w;
+
+        unsigned int p = residual & (0u - residual);   // 最低可用位
+        residual -= p;
+        stk[sbase + (top - 1) * 32].w = (int)residual; // 存回残余候选
+        if (residual == 0)
+            top--;                                     // 本层耗尽 → 弹栈
+
+        cur |= p;
+        left = (left | p) << 1;
+        right = (right | p) >> 1;
+
+        int pc = __popc(cur);
+        unsigned int child =
+            last & ~(cur | left | right | jkl_queens[jrow_base + pc]);
+
+        if (pc == leaf_pc || child == 0) {
+            // 叶子行(N-2)：child 的 popc 即解数；死胡同 child==0 加 0
+            solutions += __popc(child);
+        } else {
+            stk[sbase + top * 32] = make_int4((int)cur, (int)left, (int)right, (int)child);
+            top++;
+        }
+        }
+    }
+
+    results[gid] = solutions;
 }
 
 // =============================================================================
@@ -261,15 +223,20 @@ static void padWithPseudo(std::vector<Constellation> &consts, int n, int wgSize)
 
 // 宏：为每个N值生成一个switch case分支
 // 1. 请求最大共享内存carveout（RTX 4090为102KB）
-// 2. 启动模板化的内核：<<<numWg, WG_SIZE>>>
-#define LAUNCH_N(n_val) \
+// 2. 启动模板化的内核：<<<numWg, launch_wg>>>
+#define LAUNCH_ONE(n_val, KERNEL, SMEM) \
     case n_val: { \
-        cudaFuncSetAttribute(n_queens_kernel<n_val>, \
+        cudaFuncSetAttribute(KERNEL<n_val>, \
             cudaFuncAttributePreferredSharedMemoryCarveout, \
             cudaSharedmemCarveoutMaxShared); \
-        n_queens_kernel<n_val><<<numWg, WG_SIZE>>>(d_const, d_jkl, d_results); \
+        KERNEL<n_val><<<numWg, launch_wg, SMEM>>>(d_const, d_jkl, maxd, d_results); \
         break; \
     }
+
+// 本分支唯一内核：回载式（动态共享内存 = 精确栈深）；N=6~28 全部走回载
+// 同会话 A/B 实测：N=19~21 快 12~13%；N=22 快 8.1%（149.1s vs 162.2s）；N=23 快 8.0%（1352.4s vs 1469.7s）
+// （捕获式内核见 faf-cuda 分支）
+#define LAUNCH_N(n_val) LAUNCH_ONE(n_val, n_queens_kernel, smem_reload)
 
 // =============================================================================
 // cuda_solve — 主入口函数
@@ -298,9 +265,23 @@ long long cuda_solve(int n, int preset_queens) {
     }
 
     // Step 2: 按jkl排序、填充伪星座保证对齐
-    padWithPseudo(constellations, n, WG_SIZE);
+    // 填充模数 384 = LCM(32,64,96,128)：任何按 N 选择的块大小都能整除组边界
+    padWithPseudo(constellations, n, 384);
     long long cnt = constellations.size();
-    int numWg = cnt / WG_SIZE;
+
+    // 按 N 的块大小表（实测最优；默认 64）
+    int launch_wg = 64;
+    if (n == 20)
+        launch_wg = 128;        // N=20 实测 2195ms vs 64 的 2354ms
+    else if (n == 21 || n >= 23)
+        launch_wg = 32;         // N=21 实测 16.72s vs 64 的 17.78s；N=23 实测 1352.4s
+                                // N=24~28：κ 模型预测 32 最优（未实测，跑 N=24 前先验证）
+    {   // 实验开关：NQ_WG 环境变量可覆盖按 N 表（便于扫描，不影响正常使用）
+        const char *wge = getenv("NQ_WG");
+        if (wge)
+            launch_wg = atoi(wge);
+    }
+    int numWg = (int)(cnt / launch_wg);
 
     print_with_time("Total constellations (padded): %lld, workgroups: %d\n", cnt, numWg);
 
@@ -311,7 +292,7 @@ long long cuda_solve(int n, int preset_queens) {
     std::vector<uint32_t> jkl_queens_arr(numWg * n, 0);
     for (int wg = 0; wg < numWg; wg++) {
         // 取workgroup中第一个星座的ijkl（同组所有线程共享）
-        int ijkl = constellations[wg * WG_SIZE].start_ijkl & 0xFFFFF;
+        int ijkl = constellations[wg * launch_wg].start_ijkl & 0xFFFFF;
         int j = getj(ijkl), k = getk(ijkl), l = getl(ijkl);
 
         // 第一轮：计算j和k/l从棋盘底部向顶部延伸的对角线
@@ -335,6 +316,18 @@ long long cuda_solve(int n, int preset_queens) {
         // l行：最后一列已有皇后，清除bit 0（右边界）避免冲突
         jkl_queens_arr[wg * n + l] = ~1u;
     }
+
+    // Step 3.6: 回载内核的精确栈深（槽数 = (N-2)-start + 1；跳过伪星座与短路子问题）
+    int maxd = 1;   // 槽数
+    for (long long i = 0; i < cnt; i++) {
+        int s = constellations[i].start_ijkl >> 20;
+        if (s == 69 || s >= n - 2)
+            continue;
+        int d = (n - 2) - s + 1;
+        if (d > maxd)
+            maxd = d;
+    }
+    size_t smem_reload = (size_t)(launch_wg / 32) * maxd * 32 * sizeof(int4);   // 回载内核：int4 栈（精确深度）
 
     // Step 4: 转换为GPU端紧凑格式
     std::vector<Constellation4> const_data(cnt);
@@ -361,7 +354,8 @@ long long cuda_solve(int n, int preset_queens) {
         LAUNCH_N(6)  LAUNCH_N(7)  LAUNCH_N(8)  LAUNCH_N(9)  LAUNCH_N(10)
         LAUNCH_N(11) LAUNCH_N(12) LAUNCH_N(13) LAUNCH_N(14) LAUNCH_N(15)
         LAUNCH_N(16) LAUNCH_N(17) LAUNCH_N(18) LAUNCH_N(19) LAUNCH_N(20)
-        LAUNCH_N(21) LAUNCH_N(22) LAUNCH_N(23) LAUNCH_N(24) LAUNCH_N(25)
+        LAUNCH_N(21) LAUNCH_N(22) LAUNCH_N(23)
+        LAUNCH_N(24) LAUNCH_N(25)
         LAUNCH_N(26) LAUNCH_N(27) LAUNCH_N(28)
         default:
             print_with_time("Unsupported N: %d\n", n);
@@ -378,6 +372,7 @@ long long cuda_solve(int n, int preset_queens) {
     // Step 7: 拷回结果
     std::vector<long long> results(cnt);
     cudaMemcpy(results.data(), d_results, cnt * sizeof(long long), cudaMemcpyDeviceToHost);
+
 
     cudaFree(d_const);
     cudaFree(d_jkl);
