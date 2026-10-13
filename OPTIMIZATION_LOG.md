@@ -589,6 +589,28 @@ Verdict: **per-warp throughput is flat (even +1.7%) across 8-11 warps - no laten
 
 **Is N=24 still needed?** No longer a necessity for the conclusion: exact maxd (verified at 22/23) + the N=23 blind hit (0.2%) + today's measured scaling law cover the model. N=24's remaining value: (1) pre-N=28-launch sanity check (insurance, not required); (2) re-anchor the x9.1/N growth step once more; (3) a measured "capture@24" number for the paper/record if wanted.
 
+## Attempt #38: N=24-28 re-projection from the paper's 8x5090 line (time-ratio ~= solution-ratio law verified, 2026-10-13)
+
+Anchored on the paper's (main-line) 8x5090 measurements. The paper itself states the extrapolation law (p.9): "for N >= 23, the computation time ... increases by approximately 10 ... very close to the ratio of the number of solutions".
+
+Law check (paper-line 8x5090 measured time ratios vs exact solution ratios):
+
+| step | time ratio | solution ratio | time/sol |
+|---|---|---|---|
+| 23->24 | 9.48 | 9.39 | x1.009 |
+| 24->25 | 9.92 | 9.70 | x1.022 |
+| 25->26 | 9.87 | 10.11 | x0.977 |
+| 26->27 | 11.36* | 10.53 | x1.079 |
+| 23->27 total | x10545 | x9693 | **x1.088 (~+2.1%/step)** |
+
+(*26->27 includes the preset 6->7 change and multi-GPU imbalance; 25->26 has 2.5d rounding.) Law holds within +-2-8% per step, +8.8% cumulative.
+
+**Paper line, 8x5090, N=24-28**: 24 = 2205s (36.8min), 25 = 21880s (6.08h), 26 = 2.5d, 27 = 28.4d (all measured); **28 = 28.4d x 10.9 (trended solution ratio) x (1.00-1.08) = 310-335d ~ 10.2-11.0 months** (the paper's own estimate: 340d = 28.4x10.52x1.14; a(28) unknown, ratio trended +0.4/step).
+
+**Current line (faf-cuda-reload), 8x5090** (divide by 1.76-1.85 from the #33 end-to-end measurement; cross-checked with the reload self-chain): 24 ~ 21min, 25 ~ 3.4h, 26 ~ 1.4d, 27 ~ 15.5-17d, **28 ~ 5.5-6.5 months (~6 center)**.
+
+**Correction to #36**: the flat x9.1/N extrapolation understated 26-28 (solution ratios rise to 10.1-10.9); N=28 on 1x4090 goes from "2.7y" to ~5.0-5.8y. Also: the paper itself notes load balancing is not optimal at large N (5-day GPU finish spread in the 27 run); fixing it saves ~10% more.
+
 ## Measured Optimization Space Map (2026-10)
 
 An instrumented campaign (per-thread iteration counters, warp-level analysis, occupancy queries, SASS dumps) bounded what remains after #12:
