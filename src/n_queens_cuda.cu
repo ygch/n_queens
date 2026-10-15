@@ -107,40 +107,17 @@ long long cuda_n_queens(int N, int rows) {
         return -1;
     }
 
-    // 2. divide total subproblems to different trunks
+    // 2. divide total subproblems to different gpus（按 mod 交错分配）
+    // 子问题 i 归卡 (i % gpu_num)：各卡从同一代价分布抽样，平衡的是期望负载，
+    // 避免整块划分下负载方差随子问题代价聚集而放大（旧的比例表正是对该偏差的人工补偿）。
+    // new_cnt/start_pos 同时描述各卡在主存 partial_sum 中的写回区域。
     vector<long long> new_cnt(gpu_num), start_pos(gpu_num);
-    long long total = 0;
-    if (gpu_num == 8) {
-        float ratio[8] = {0.20, 0.15, 0.12, 0.11, 0.11, 0.11, 0.10, 0.10};
-        for (int i = 0; i < gpu_num - 1; i++) {
-            new_cnt[i] = cnt * ratio[i];
-            start_pos[i] = total;
-            total += new_cnt[i];
-        }
-    } else if (gpu_num == 4) {
-        float ratio[4] = {0.35, 0.23, 0.22, 0.2};
-        for (int i = 0; i < gpu_num - 1; i++) {
-            new_cnt[i] = cnt * ratio[i];
-            start_pos[i] = total;
-            total += new_cnt[i];
-        }
-    } else if (gpu_num == 2) {
-        float ratio[2] = {0.58, 0.42};
-        for (int i = 0; i < gpu_num - 1; i++) {
-            new_cnt[i] = cnt * ratio[i];
-            start_pos[i] = total;
-            total += new_cnt[i];
-        }
-    } else {
-        long long partial_cnt = cnt / gpu_num;
-        for (int i = 0; i < gpu_num - 1; i++) {
-            new_cnt[i] = partial_cnt;
-            start_pos[i] = total;
-            total += partial_cnt;
-        }
+    long long base = cnt / gpu_num, rem = cnt % gpu_num, acc = 0;
+    for (int i = 0; i < gpu_num; i++) {
+        new_cnt[i] = base + (i < rem ? 1 : 0);   // == #{ j | j % gpu_num == i }
+        start_pos[i] = acc;
+        acc += new_cnt[i];
     }
-    new_cnt[gpu_num - 1] = cnt - total;
-    start_pos[gpu_num - 1] = total;
 
     // 3. use different gpu to process each trunk
 #pragma omp parallel num_threads(gpu_num)
@@ -148,34 +125,49 @@ long long cuda_n_queens(int N, int rows) {
         int idx = omp_get_thread_num();
         CU_SAFE_CALL(cudaSetDevice(idx));
 
-        long long total = cnt;
-        long long cnt = new_cnt[idx];
+        long long my_cnt = new_cnt[idx];
+        if (my_cnt == 0) {
+            print_with_time("gpu [%d] idle (no subproblems assigned).\n", idx);
+        } else {
+            print_with_time("gpu [%d] start job, with %lld(%.2f) subproblems.\n", idx, my_cnt,
+                            my_cnt * 1.0 / cnt);
 
-        print_with_time("gpu [%d] start job, with %lld(%.2f) subproblems.\n", idx, cnt, cnt * 1.0 / total);
+            // mod 分配：本卡负责子问题 { i | i % gpu_num == idx }，收集为连续段
+            vector<int> my_tot;
+            my_tot.reserve(my_cnt * 3);
+            for (long long i = idx; i < cnt; i += gpu_num) {
+                my_tot.push_back(tot[i * 3]);
+                my_tot.push_back(tot[i * 3 + 1]);
+                my_tot.push_back(tot[i * 3 + 2]);
+            }
 
-        int *cuda_tot;
-        CU_SAFE_CALL(cudaMalloc(&cuda_tot, sizeof(int) * cnt * 3));
-        CU_SAFE_CALL(cudaMemcpy(cuda_tot, tot.data() + start_pos[idx] * 3, sizeof(int) * cnt * 3, cudaMemcpyHostToDevice));
+            int *cuda_tot;
+            CU_SAFE_CALL(cudaMalloc(&cuda_tot, sizeof(int) * my_cnt * 3));
+            CU_SAFE_CALL(cudaMemcpy(cuda_tot, my_tot.data(), sizeof(int) * my_cnt * 3, cudaMemcpyHostToDevice));
+            vector<int>().swap(my_tot);   // 及时释放主机内存
 
-        long long *cuda_partial_sum;
-        CU_SAFE_CALL(cudaMalloc(&cuda_partial_sum, sizeof(long long) * cnt));
-        CU_SAFE_CALL(cudaMemset(cuda_partial_sum, 0, sizeof(long long) * cnt));
+            long long *cuda_partial_sum;
+            CU_SAFE_CALL(cudaMalloc(&cuda_partial_sum, sizeof(long long) * my_cnt));
+            CU_SAFE_CALL(cudaMemset(cuda_partial_sum, 0, sizeof(long long) * my_cnt));
 
-        dim3 dimBlock(CU1DBLOCK);
-        dim3 dimGrid(1024);
+            dim3 dimBlock(CU1DBLOCK);
+            dim3 dimGrid(1024);
 
-        n_queens<<<dimGrid, dimBlock>>>(N, cuda_tot, cuda_partial_sum, cnt);
+            n_queens<<<dimGrid, dimBlock>>>(N, cuda_tot, cuda_partial_sum, my_cnt);
 
-        cudaError_t err = cudaDeviceSynchronize();
-        if (err != cudaSuccess) {
-            printf("kernel error: %s\n", cudaGetErrorString(err));
+            cudaError_t err = cudaDeviceSynchronize();
+            if (err != cudaSuccess) {
+                printf("kernel error: %s\n", cudaGetErrorString(err));
+            }
+
+            // 写回：区域 [start_pos, start_pos+my_cnt) 与其他卡互不重叠；
+            // 段内结果对应 mod 序子问题，最终求和对所有子问题权重恒为 ×2，与顺序无关
+            CU_SAFE_CALL(cudaMemcpy(partial_sum.data() + start_pos[idx], cuda_partial_sum, sizeof(long long) * my_cnt, cudaMemcpyDeviceToHost));
+
+            CU_SAFE_CALL(cudaFree(cuda_tot));
+            CU_SAFE_CALL(cudaFree(cuda_partial_sum));
+            print_with_time("gpu [%d] finish job.\n", idx);
         }
-
-        CU_SAFE_CALL(cudaMemcpy(partial_sum.data() + start_pos[idx], cuda_partial_sum, sizeof(long long) * cnt, cudaMemcpyDeviceToHost));
-
-        CU_SAFE_CALL(cudaFree(cuda_tot));
-        CU_SAFE_CALL(cudaFree(cuda_partial_sum));
-        print_with_time("gpu [%d] finish job.\n", idx);
     }
 
     for (long long i = 0; i < cnt; i++) {
