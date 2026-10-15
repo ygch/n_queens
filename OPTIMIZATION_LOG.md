@@ -629,6 +629,26 @@ Method: reload kernel changed to `__shared__ int4 stk[(WGW/32)*(N-4)*32]` - with
 
 Engineering call: **production stays dynamic** (static deployment would need per-(N,WG) instantiations, 3x instantiation count, and hits the 48KB static cap at large N - for zero gain).
 
+## Attempt #40: reload-vs-capture gap shrinks with N - recheck and 24-28 projection correction (2026-10-13)
+
+User observation ("does the reload lead shrink as N grows?") confirmed. Pristine-capture reference (calc metric, 1x4090):
+
+| N | capture | reload | reload lead |
+|---|---|---|---|
+| 19 | 443 ms | 396 ms | 10.6% |
+| 20 | 2490 ms | 2150 ms | 13.6% |
+| 21 | 18.77 s | 16.49 s | 12.2% |
+| 22 | 157.5 s | 148.0 s | 6.1% |
+| 23 | ~1425 s (est.) | 1352.4 s | ~5.1% (-8.0% vs the evolved capture) |
+
+**11-14% (19-21) -> 5-8% (22-23): the lead roughly halved, beyond noise.**
+
+Mechanism: lead ~= 1 - W_c/(W_r*kappa). Both sides' resident warps step down with N (per-block smem ~ N); from N=22 the reload's rung drops first (12->10->9 warps) while the capture holds a 30-34-warp plateau. Per-row effective kappa back-fit from the 19-23 pristine pairs: **3.2-3.6** (3.2-3.4 with the +1KB/block reservation accounting; 3.4-3.7 without) - **#36's kappa=3.85 mixed the two accounting conventions and is 10-20% too high**.
+
+**24-28 correction**: recomputing the #36 ladder with kappa=3.2-3.6 (full enumeration) gives T_r/T_c = **0.93-1.06 (-7%..+6% near-tie band, center ~-2..3%)**, retracting the "reload wins 13-16%" claim; in the most conservative conventions the capture can edge ahead 1-5% at individual N. Absolute-time predictions unchanged (reload@24 ~ 3.4-3.5h).
+
+**Impact**: branch choice unchanged (the current branch has reload only); **the N=24 run regains its value as adjudicator** of "shrinkage continues vs ladder rebound" and of the true kappa (reload 3.4h; full A/B ~7h).
+
 ## Measured Optimization Space Map (2026-10)
 
 An instrumented campaign (per-thread iteration counters, warp-level analysis, occupancy queries, SASS dumps) bounded what remains after #12:
