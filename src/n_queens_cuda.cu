@@ -109,12 +109,12 @@ long long cuda_n_queens(int N, int rows) {
 
     // 2. divide total subproblems to different gpus（按 mod 交错分配）
     // 子问题 i 归卡 (i % gpu_num)：各卡从同一代价分布抽样，平衡的是期望负载，
-    // 避免整块划分下负载方差随子问题代价聚集而放大（旧的比例表正是对该偏差的人工补偿）。
+    // 避免整块划分下负载方差随子问题代价聚集而放大。
     // new_cnt/start_pos 同时描述各卡在主存 partial_sum 中的写回区域。
     vector<long long> new_cnt(gpu_num), start_pos(gpu_num);
-    long long base = cnt / gpu_num, rem = cnt % gpu_num, acc = 0;
+    long long base_cnt = cnt / gpu_num, rem = cnt % gpu_num, acc = 0;
     for (int i = 0; i < gpu_num; i++) {
-        new_cnt[i] = base + (i < rem ? 1 : 0);   // == #{ j | j % gpu_num == i }
+        new_cnt[i] = base_cnt + (i < rem ? 1 : 0);   // == #{ j | j % gpu_num == i }
         start_pos[i] = acc;
         acc += new_cnt[i];
     }
@@ -129,7 +129,6 @@ long long cuda_n_queens(int N, int rows) {
         print_with_time("gpu [%d] start job, with %lld(%.2f) subproblems.\n", idx, my_cnt,
                         my_cnt * 1.0 / cnt);
 
-        // mod 分配：本卡负责子问题 { i | i % gpu_num == idx }，收集为连续段
         vector<int> my_tot;
         my_tot.reserve(my_cnt * 3);
         for (long long i = idx; i < cnt; i += gpu_num) {
