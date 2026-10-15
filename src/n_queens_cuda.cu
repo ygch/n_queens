@@ -4,7 +4,7 @@
 // 整体架构：
 //   1. CPU 端生成所有星座子问题（4个边界皇后 + preset_queens个预设皇后）
 //   2. 按jkl分组排序，填充伪星座保证对齐（模 384 = LCM(32,64,96,128)）
-//   3. 预计算每个workgroup的jkl_queens对角线约束
+//   3. 预计算每个block的jkl_queens对角线约束
 //   4. GPU内核：每线程一个星座，int4 全状态重载式回溯（N=6~28 全部走回载内核）
 //   5. CPU汇总：results[i] * symmetry(ijkl)，乘以D4对称倍数
 //
@@ -17,7 +17,7 @@
 //   行号: 0 (顶) ~ N-1 (底)
 //
 // 性能特征（RTX 4090，生产配置实测）：
-//   N=20 WG=128 ≈ 2152ms；N=21 WG=32 ≈ 16.5s；N=22 WG=64 ≈ 149s；N=23 WG=32 ≈ 1352.4s
+//   N=20 N=20 block=128 ≈ 2152ms；N=21 block=32 ≈ 16.5s；N=22 block=64 ≈ 149s；N=23 block=32 ≈ 1352.4s
 //   内核为吞吐量瓶颈（IPC限制），非延迟瓶颈；占用率受共享内存（精确栈深）限制
 //
 // 注：原始捕获式内核（4B/层栈 + 捕获位 + funnelshift）见 faf-cuda 分支
@@ -33,8 +33,8 @@
 #include <cstdint>
 #include <vector>
 
-// 块大小按 N 由 host 选择（见 cuda_solve 的按 N 表；默认 64，NQ_WG 可覆盖）
-#define MAX_WG 128          // launch_bounds 上限
+// 块大小按 N 由 host 选择（见 cuda_solve 的按 N 表；默认 64，NQ_BLOCK 可覆盖）
+#define MAX_BLOCK 128          // launch_bounds 上限
 
 // GPU端星座数据结构（比CPU端Constellation更紧凑，无solutions字段）
 // 16字节，便于全局内存合并访问
@@ -56,10 +56,10 @@ struct Constellation4 {
 //   leaf_pc = popc(col) + (N - start - 2)；jkl 行号 = (start - popc(col)) + popc(cur)
 // =============================================================================
 template <int N>
-__global__ void __launch_bounds__(MAX_WG, 12)
+__global__ void __launch_bounds__(MAX_BLOCK, 12)
 n_queens_kernel(
     const Constellation4 * __restrict__ constellations,  // 每线程一个星座
-    const unsigned int * __restrict__ jkl_queens_arr,     // 每workgroup的N个jkl约束
+    const unsigned int * __restrict__ jkl_queens_arr,     // 每block的N个jkl约束
     int S,                                                // 栈深：host 按真实最大深度精确计算
     long long * __restrict__ results)                     // 输出：每线程一个解数
 {
@@ -192,45 +192,45 @@ n_queens_kernel(
 // Host 端辅助函数
 // =============================================================================
 
-// 按jkl排序星座：相同jkl的星座分到同一workgroup，共享jkl_queens共享内存
+// 按jkl排序星座：相同jkl的星座分到同一block，共享jkl_queens共享内存
 static void sortByJkl(std::vector<Constellation> &consts) {
     std::sort(consts.begin(), consts.end(), [](const Constellation &a, const Constellation &b) {
         return getJkl(a.start_ijkl) < getJkl(b.start_ijkl);
     });
 }
 
-// 填充伪星座：在每个jkl组之间插入假数据，使每组星座数为wgSize的倍数
-// 确保每个workgroup内所有线程处理相同jkl的星座
+// 填充伪星座：在每个jkl组之间插入假数据，使每组星座数为blockSize的倍数
+// 确保每个block内所有线程处理相同jkl的星座
 // 伪星座标记：start_ijkl = (69 << 20)，内核检测到start==69直接返回0
-static void padWithPseudo(std::vector<Constellation> &consts, int n, int wgSize) {
+static void padWithPseudo(std::vector<Constellation> &consts, int n, int blockSize) {
     sortByJkl(consts);
     std::vector<Constellation> padded;
     int allOnes = (1 << n) - 1;
     int currentJkl = getJkl(consts[0].start_ijkl);
     for (auto &c : consts) {
         if (getJkl(c.start_ijkl) != currentJkl) {
-            // jkl组切换：填充伪星座直到对齐wgSize
-            while (padded.size() % wgSize != 0)
+            // jkl组切换：填充伪星座直到对齐blockSize
+            while (padded.size() % blockSize != 0)
                 padded.push_back({allOnes, allOnes, allOnes, (69 << 20), -2});
             currentJkl = getJkl(c.start_ijkl);
         }
         padded.push_back(c);
     }
     // 末尾对齐
-    while (padded.size() % wgSize != 0)
+    while (padded.size() % blockSize != 0)
         padded.push_back({allOnes, allOnes, allOnes, (69 << 20), -2});
     consts = std::move(padded);
 }
 
 // 宏：为每个N值生成一个switch case分支
 // 1. 请求最大共享内存carveout（RTX 4090为102KB）
-// 2. 启动模板化的内核：<<<numWg, launch_wg>>>
+// 2. 启动模板化的内核：<<<num_blocks, block_size>>>
 #define LAUNCH_ONE(n_val, KERNEL, SMEM) \
     case n_val: { \
         cudaFuncSetAttribute(KERNEL<n_val>, \
             cudaFuncAttributePreferredSharedMemoryCarveout, \
             cudaSharedmemCarveoutMaxShared); \
-        KERNEL<n_val><<<numWg, launch_wg, SMEM>>>(d_const, d_jkl, maxd, d_results); \
+        KERNEL<n_val><<<num_blocks, block_size, SMEM>>>(d_const, d_jkl, maxd, d_results); \
         break; \
     }
 
@@ -241,51 +241,51 @@ static void padWithPseudo(std::vector<Constellation> &consts, int n, int wgSize)
 
 // =============================================================================
 // 多卡求解（mod 交错分配）
-// 分配粒度 = workgroup：同一 workgroup 的星座共享一份 jkl_queens 表，
-// workgroup wg 归卡 (wg % gpu_num)；各卡把分到的 workgroup 重排为连续段后，
+// 分配粒度 = block：同一 block 的星座共享一份 jkl_queens 表，
+// block blk 归卡 (blk % gpu_num)；各卡把分到的 block 重排为连续段后，
 // 走与单卡相同的内核（段内 blockIdx 与重排后的 jkl 行一一对应）。
 // =============================================================================
-static long long solve_multi_gpu(int n, int gpu_num, int launch_wg, int numWg, int maxd,
+static long long solve_multi_gpu(int n, int gpu_num, int block_size, int num_blocks, int maxd,
                                  const std::vector<Constellation4> &const_data,
                                  const std::vector<uint32_t> &jkl_queens_arr) {
     struct timeval t0, t1;
     long long sum = 0;
 
-    std::vector<int> wg_cnt(gpu_num, 0);
-    for (int wg = 0; wg < numWg; wg++)
-        wg_cnt[wg % gpu_num]++;
+    std::vector<int> block_cnt(gpu_num, 0);
+    for (int blk = 0; blk < num_blocks; blk++)
+        block_cnt[blk % gpu_num]++;
 
     std::vector<std::vector<Constellation4>> g_const(gpu_num);
     std::vector<std::vector<uint32_t>> g_jkl(gpu_num);
     std::vector<std::vector<int>> g_w(gpu_num);   // symmetry 权重（伪星座记 0）
     for (int g = 0; g < gpu_num; g++) {
-        g_const[g].reserve((size_t)wg_cnt[g] * launch_wg);
-        g_jkl[g].reserve((size_t)wg_cnt[g] * n);
-        g_w[g].reserve((size_t)wg_cnt[g] * launch_wg);
+        g_const[g].reserve((size_t)block_cnt[g] * block_size);
+        g_jkl[g].reserve((size_t)block_cnt[g] * n);
+        g_w[g].reserve((size_t)block_cnt[g] * block_size);
     }
-    for (int wg = 0; wg < numWg; wg++) {
-        int g = wg % gpu_num;
-        const Constellation4 *src = const_data.data() + (size_t)wg * launch_wg;
-        g_const[g].insert(g_const[g].end(), src, src + launch_wg);
-        for (int j = 0; j < launch_wg; j++) {
+    for (int blk = 0; blk < num_blocks; blk++) {
+        int g = blk % gpu_num;
+        const Constellation4 *src = const_data.data() + (size_t)blk * block_size;
+        g_const[g].insert(g_const[g].end(), src, src + block_size);
+        for (int j = 0; j < block_size; j++) {
             int s = src[j].start_ijkl >> 20;
             g_w[g].push_back(s == 69 ? 0 : symmetry(n, src[j].start_ijkl & 0xFFFFF));
         }
-        const uint32_t *row = jkl_queens_arr.data() + (size_t)wg * n;
+        const uint32_t *row = jkl_queens_arr.data() + (size_t)blk * n;
         g_jkl[g].insert(g_jkl[g].end(), row, row + n);
     }
 
     std::vector<std::vector<long long>> g_res(gpu_num);
     gettimeofday(&t0, NULL);
-#pragma omp parallel num_threads(std::min(gpu_num, numWg))
+#pragma omp parallel num_threads(std::min(gpu_num, num_blocks))
     {
         int g = omp_get_thread_num();
         cudaSetDevice(g);
 
-        int numWg = wg_cnt[g];                        // 宏内变量名对齐（本卡）
+        int num_blocks = block_cnt[g];                        // 宏内变量名对齐（本卡）
         long long my_cnt = (long long)g_const[g].size();
-        print_with_time("gpu [%d] start job, with %d workgroups (%lld subproblems).\n",
-                        g, numWg, my_cnt);
+        print_with_time("gpu [%d] start job, with %d blocks (%lld subproblems).\n",
+                        g, num_blocks, my_cnt);
 
         Constellation4 *d_const;
         unsigned int *d_jkl;
@@ -297,7 +297,7 @@ static long long solve_multi_gpu(int n, int gpu_num, int launch_wg, int numWg, i
         cudaMemcpy(d_jkl, g_jkl[g].data(), g_jkl[g].size() * sizeof(uint32_t), cudaMemcpyHostToDevice);
         cudaMemset(d_results, 0, my_cnt * sizeof(long long));
 
-        size_t smem_reload = (size_t)(launch_wg / 32) * maxd * 32 * sizeof(int4);   // 宏内变量名对齐
+        size_t smem_reload = (size_t)(block_size / 32) * maxd * 32 * sizeof(int4);   // 宏内变量名对齐
         switch (n) {
             LAUNCH_N(6)  LAUNCH_N(7)  LAUNCH_N(8)  LAUNCH_N(9)  LAUNCH_N(10)
             LAUNCH_N(11) LAUNCH_N(12) LAUNCH_N(13) LAUNCH_N(14) LAUNCH_N(15)
@@ -365,29 +365,29 @@ long long cuda_solve(int n, int preset_queens) {
     long long cnt = constellations.size();
 
     // 按 N 的块大小表（实测最优；默认 64）
-    int launch_wg = 64;
+    int block_size = 64;
     if (n == 20)
-        launch_wg = 128;        // N=20 实测 2195ms vs 64 的 2354ms
+        block_size = 128;        // N=20 实测 2195ms vs 64 的 2354ms
     else if (n == 21 || n >= 23)
-        launch_wg = 32;         // N=21 实测 16.72s vs 64 的 17.78s；N=23 实测 1352.4s
+        block_size = 32;         // N=21 实测 16.72s vs 64 的 17.78s；N=23 实测 1352.4s
                                 // N=24~28：κ 模型预测 32 最优（未实测，跑 N=24 前先验证）
-    {   // 实验开关：NQ_WG 环境变量可覆盖按 N 表（便于扫描，不影响正常使用）
-        const char *wge = getenv("NQ_WG");
-        if (wge)
-            launch_wg = atoi(wge);
+    {   // 实验开关：NQ_BLOCK 环境变量可覆盖按 N 表（便于扫描，不影响正常使用）
+        const char *bs_env = getenv("NQ_BLOCK");
+        if (bs_env)
+            block_size = atoi(bs_env);
     }
-    int numWg = (int)(cnt / launch_wg);
+    int num_blocks = (int)(cnt / block_size);
 
-    print_with_time("Total constellations (padded): %lld, workgroups: %d\n", cnt, numWg);
+    print_with_time("Total constellations (padded): %lld, blocks: %d\n", cnt, num_blocks);
 
     // Step 3: 预计算 jkl_queens_arr
-    // 对每个workgroup，根据其首个星座的ijkl计算边界皇后j/k/l在每一行的对角线约束
+    // 对每个block，根据其首个星座的ijkl计算边界皇后j/k/l在每一行的对角线约束
     // jkl_queens[row] 是一个位掩码，标记该行被j/k/l对角线占用的列
     unsigned int L = 1u << (n - 1);
-    std::vector<uint32_t> jkl_queens_arr(numWg * n, 0);
-    for (int wg = 0; wg < numWg; wg++) {
-        // 取workgroup中第一个星座的ijkl（同组所有线程共享）
-        int ijkl = constellations[wg * launch_wg].start_ijkl & 0xFFFFF;
+    std::vector<uint32_t> jkl_queens_arr(num_blocks * n, 0);
+    for (int blk = 0; blk < num_blocks; blk++) {
+        // 取block中第一个星座的ijkl（同组所有线程共享）
+        int ijkl = constellations[blk * block_size].start_ijkl & 0xFFFFF;
         int j = getj(ijkl), k = getk(ijkl), l = getl(ijkl);
 
         // 第一轮：计算j和k/l从棋盘底部向顶部延伸的对角线
@@ -396,20 +396,20 @@ long long cuda_solve(int n, int preset_queens) {
         // ldiag: j的左对角线 + l的左对角线（从底向上）
         unsigned int ldiag = (L >> j) | (L >> l);
         for (int row = 0; row < n; row++)
-            jkl_queens_arr[wg * n + (n - 1 - row)] = (ldiag >> row) | (rdiag << row) | L | 1;
+            jkl_queens_arr[blk * n + (n - 1 - row)] = (ldiag >> row) | (rdiag << row) | L | 1;
             // | L | 1: 设置两个边界列（bit 0 和 bit N-1），因为l和k皇后占据这两列
 
         // 第二轮：叠加k和l从顶部向底部延伸的对角线
         ldiag = L >> k;   // k的左对角线（从顶向下）
         rdiag = 1u << l;  // l的右对角线（从顶向下）
         for (int row = 0; row < n; row++)
-            jkl_queens_arr[wg * n + row] |= (ldiag << row) | (rdiag >> row);
+            jkl_queens_arr[blk * n + row] |= (ldiag << row) | (rdiag >> row);
 
         // 边界皇后所在行的特殊处理：
         // k行：第一列已有皇后，清除bit N-1（左边界）避免冲突
-        jkl_queens_arr[wg * n + k] = ~L;
+        jkl_queens_arr[blk * n + k] = ~L;
         // l行：最后一列已有皇后，清除bit 0（右边界）避免冲突
-        jkl_queens_arr[wg * n + l] = ~1u;
+        jkl_queens_arr[blk * n + l] = ~1u;
     }
 
     // Step 3.6: 回载内核的精确栈深（槽数 = (N-2)-start + 1；跳过伪星座与短路子问题）
@@ -422,7 +422,7 @@ long long cuda_solve(int n, int preset_queens) {
         if (d > maxd)
             maxd = d;
     }
-    size_t smem_reload = (size_t)(launch_wg / 32) * maxd * 32 * sizeof(int4);   // 回载内核：int4 栈（精确深度）
+    size_t smem_reload = (size_t)(block_size / 32) * maxd * 32 * sizeof(int4);   // 回载内核：int4 栈（精确深度）
 
     // Step 4: 转换为GPU端紧凑格式
     std::vector<Constellation4> const_data(cnt);
@@ -431,22 +431,22 @@ long long cuda_solve(int n, int preset_queens) {
                          constellations[i].col, constellations[i].start_ijkl};
     }
 
-    // 多卡：workgroup 粒度 mod 交错分配（wg 归卡 wg % gpu_num）
+    // 多卡：block 粒度 mod 交错分配（blk 归卡 blk % gpu_num）
     int gpu_num = 0;
     cudaGetDeviceCount(&gpu_num);
     if (gpu_num > 1)
-        return solve_multi_gpu(n, gpu_num, launch_wg, numWg, maxd, const_data, jkl_queens_arr);
+        return solve_multi_gpu(n, gpu_num, block_size, num_blocks, maxd, const_data, jkl_queens_arr);
 
     // Step 5: 分配GPU内存并传输数据
     Constellation4 *d_const;
     unsigned int *d_jkl;
     long long *d_results;
     cudaMalloc(&d_const, cnt * sizeof(Constellation4));
-    cudaMalloc(&d_jkl, numWg * n * sizeof(unsigned int));
+    cudaMalloc(&d_jkl, num_blocks * n * sizeof(unsigned int));
     cudaMalloc(&d_results, cnt * sizeof(long long));
 
     cudaMemcpy(d_const, const_data.data(), cnt * sizeof(Constellation4), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_jkl, jkl_queens_arr.data(), numWg * n * sizeof(unsigned int), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_jkl, jkl_queens_arr.data(), num_blocks * n * sizeof(unsigned int), cudaMemcpyHostToDevice);
     cudaMemset(d_results, 0, cnt * sizeof(long long));
 
     // Step 6: 启动GPU内核

@@ -15,7 +15,7 @@ Compile target is **sm_89** (RTX 4090). Requires `nvcc` with C++17 and `-allow-u
 
 This branch (`faf-cuda-reload`) has a **single production kernel — the reload form**:
 - **`src/n_queens_cuda.cu`**: faf's D4 constellation tree (4 border queens i,j,k,l + preset queens + per-workgroup `jkl_queens` table) × main's reload state machine — 16B/level `int4` full-state stack `{cur,left,right,residual}` (slot `e*32+l`, zero bank conflict), per-trip reload, **no** capture bits / anti-revisit mask; leaf counting via `__popc(child)` at row N-2 (second-to-last-row optimization); manual unroll×2; exact-depth dynamic shared memory.
-- All N=6–28 dispatch to the reload kernel via a `switch` in `cuda_solve()`; block size comes from a **per-N WG table** (20→128, 21→32, 23→32, 24–28→32, else 64; `NQ_WG` env var overrides for sweeps).
+- All N=6–28 dispatch to the reload kernel via a `switch` in `cuda_solve()`; block size comes from a **per-N table** (20→128, 21→32, 23→32, 24–28→32, else 64; `NQ_BLOCK` env var overrides for sweeps). Multi-GPU: blocks are assigned to GPUs by `blk % gpu_num` (mod-interleaved, `solve_multi_gpu()`).
 - Elsewhere: the original **capture** kernel (4B/level stack + `ld_mem`/`rd_mem` + funnelshift + `direction` trick) is frozen on branch `faf-cuda`; the int4+PTX legacy solver lives on `main` (`gpu_solver.cpp`).
 
 `constellation.cpp` implements D4 symmetry enumeration (rotation/mirror elimination, `symmetry()` returns multiplier 8/4/2). Kernels are **template-instantiated per N** (6–28).
@@ -33,12 +33,12 @@ This branch (`faf-cuda-reload`) has a **single production kernel — the reload 
 - `main`: fastest original solver (int4 + PTX, ~3.6s for N=20)
 - `faf-opencl`: Step 1 — minimal C/C++ port of NQueensFAF's OpenCL code
 - `faf-cuda`: Step 2 — original faf **capture** CUDA port (frozen reference implementation)
-- `faf-cuda-reload` (**this branch**): reload-only production line — the 2026-10 optimization campaign (per-N WG table, exact-depth stack, unroll×2)
+- `faf-cuda-reload` (**this branch**): reload-only production line — the 2026-10 optimization campaign (per-N block-size table, exact-depth stack, unroll×2)
 - `v4-mid-block` and others: experiment archive (`v4-mid-block` carries the full 39-commit campaign incl. refuted ideas; `faf-reload-loop` is a redundant ancestor of it)
 
 ## Gotchas
 
 - Stack layout: lane `l`'s level `e` sits at `sbase + e*32` with `sbase = (lid>>5)*(S*32) + (lid&31)` — never break the stride-32 (bank conflicts).
-- N=24–28 production config (reload @ WG=32) is **κ-model projected, not yet measured** — validate with one N=24 run before starting any long run.
+- N=24–28 production config (reload @ block size 32) is **κ-model projected, not yet measured** — validate with one N=24 run before starting any long run.
 - Capture-kernel traps — `__funnelshift_l(lo, hi, s)` argument order; anti-revisit mask `free &= ~(queen + direction - 1)` — apply only on `faf-cuda`.
 - NQueensFAF reference project is at `../NQueensFAF/` (OpenCL baseline). `tools/nqueens_replica.py` is the per-frame Python oracle used to validate kernel semantics.
