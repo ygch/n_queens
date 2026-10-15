@@ -242,7 +242,7 @@ static void padWithPseudo(std::vector<Constellation> &consts, int n, int blockSi
 // =============================================================================
 // 多卡求解（mod 交错分配）
 // 分配粒度 = block：同一 block 的星座共享一份 jkl_queens 表，
-// block blk 归卡 (blk % gpu_num)；各卡把分到的 block 重排为连续段后，
+// block（编号 blk）归卡 blk % gpu_num；各卡把分到的 block 重排为连续段后，
 // 走与单卡相同的内核（段内 blockIdx 与重排后的 jkl 行一一对应）。
 // =============================================================================
 static long long solve_multi_gpu(int n, int gpu_num, int block_size, int num_blocks, int maxd,
