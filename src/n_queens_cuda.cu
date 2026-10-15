@@ -28,6 +28,7 @@
 #include "utils.h"
 
 #include <cuda_runtime.h>
+#include <omp.h>
 #include <algorithm>
 #include <cstdint>
 #include <vector>
@@ -272,6 +273,99 @@ static void padWithPseudo(std::vector<Constellation> &consts, int n, int wgSize)
     }
 
 // =============================================================================
+// 多卡求解（mod 交错分配）
+// 分配粒度 = workgroup：同一 workgroup 的星座共享一份 jkl_queens 表，
+// workgroup wg 归卡 (wg % gpu_num)；各卡把分到的 workgroup 重排为连续段后，
+// 走与单卡相同的内核（段内 blockIdx 与重排后的 jkl 行一一对应）。
+// =============================================================================
+static long long solve_multi_gpu(int n, int gpu_num, int numWg,
+                                 const std::vector<Constellation4> &const_data,
+                                 const std::vector<uint32_t> &jkl_queens_arr) {
+    struct timeval t0, t1;
+    long long sum = 0;
+
+    std::vector<int> wg_cnt(gpu_num, 0);
+    for (int wg = 0; wg < numWg; wg++)
+        wg_cnt[wg % gpu_num]++;
+
+    std::vector<std::vector<Constellation4>> g_const(gpu_num);
+    std::vector<std::vector<uint32_t>> g_jkl(gpu_num);
+    std::vector<std::vector<int>> g_w(gpu_num);   // symmetry 权重（伪星座记 0）
+    for (int g = 0; g < gpu_num; g++) {
+        g_const[g].reserve((size_t)wg_cnt[g] * WG_SIZE);
+        g_jkl[g].reserve((size_t)wg_cnt[g] * n);
+        g_w[g].reserve((size_t)wg_cnt[g] * WG_SIZE);
+    }
+    for (int wg = 0; wg < numWg; wg++) {
+        int g = wg % gpu_num;
+        const Constellation4 *src = const_data.data() + (size_t)wg * WG_SIZE;
+        g_const[g].insert(g_const[g].end(), src, src + WG_SIZE);
+        for (int j = 0; j < WG_SIZE; j++) {
+            int s = src[j].start_ijkl >> 20;
+            g_w[g].push_back(s == 69 ? 0 : symmetry(n, src[j].start_ijkl & 0xFFFFF));
+        }
+        const uint32_t *row = jkl_queens_arr.data() + (size_t)wg * n;
+        g_jkl[g].insert(g_jkl[g].end(), row, row + n);
+    }
+
+    std::vector<std::vector<long long>> g_res(gpu_num);
+    gettimeofday(&t0, NULL);
+#pragma omp parallel num_threads(std::min(gpu_num, numWg))
+    {
+        int g = omp_get_thread_num();
+        cudaSetDevice(g);
+
+        int numWg = wg_cnt[g];                        // 宏内变量名对齐（本卡）
+        long long my_cnt = (long long)g_const[g].size();
+        print_with_time("gpu [%d] start job, with %d workgroups (%lld subproblems).\n",
+                        g, numWg, my_cnt);
+
+        Constellation4 *d_const;
+        unsigned int *d_jkl;
+        long long *d_results;
+        cudaMalloc(&d_const, my_cnt * sizeof(Constellation4));
+        cudaMalloc(&d_jkl, g_jkl[g].size() * sizeof(uint32_t));
+        cudaMalloc(&d_results, my_cnt * sizeof(long long));
+        cudaMemcpy(d_const, g_const[g].data(), my_cnt * sizeof(Constellation4), cudaMemcpyHostToDevice);
+        cudaMemcpy(d_jkl, g_jkl[g].data(), g_jkl[g].size() * sizeof(uint32_t), cudaMemcpyHostToDevice);
+        cudaMemset(d_results, 0, my_cnt * sizeof(long long));
+
+        switch (n) {
+            LAUNCH_N(6)  LAUNCH_N(7)  LAUNCH_N(8)  LAUNCH_N(9)  LAUNCH_N(10)
+            LAUNCH_N(11) LAUNCH_N(12) LAUNCH_N(13) LAUNCH_N(14) LAUNCH_N(15)
+            LAUNCH_N(16) LAUNCH_N(17) LAUNCH_N(18) LAUNCH_N(19) LAUNCH_N(20)
+            LAUNCH_N(21) LAUNCH_N(22) LAUNCH_N(23) LAUNCH_N(24) LAUNCH_N(25)
+            LAUNCH_N(26) LAUNCH_N(27) LAUNCH_N(28)
+            default:
+                print_with_time("Unsupported N: %d\n", n);
+        }
+        cudaError_t err = cudaDeviceSynchronize();
+        if (err != cudaSuccess) {
+            print_with_time("CUDA kernel error: %s\n", cudaGetErrorString(err));
+        }
+
+        g_res[g].resize(my_cnt);
+        cudaMemcpy(g_res[g].data(), d_results, my_cnt * sizeof(long long), cudaMemcpyDeviceToHost);
+
+        cudaFree(d_const);
+        cudaFree(d_jkl);
+        cudaFree(d_results);
+        std::vector<Constellation4>().swap(g_const[g]);   // 及时释放主机内存
+        std::vector<uint32_t>().swap(g_jkl[g]);
+        print_with_time("gpu [%d] finish job.\n", g);
+    }
+    gettimeofday(&t1, NULL);
+    print_with_time("CUDA kernel time: %.2fms\n", time_diff_ms(t0, t1));
+
+    // 汇总（与单卡同口径：results × symmetry；伪星座权重 0）
+    for (int g = 0; g < gpu_num; g++)
+        for (size_t j = 0; j < g_res[g].size(); j++)
+            sum += g_res[g][j] * g_w[g][j];
+
+    return sum;
+}
+
+// =============================================================================
 // cuda_solve — 主入口函数
 //
 // 流程：
@@ -342,6 +436,12 @@ long long cuda_solve(int n, int preset_queens) {
         const_data[i] = {constellations[i].ld, constellations[i].rd,
                          constellations[i].col, constellations[i].start_ijkl};
     }
+
+    // 多卡：workgroup 粒度 mod 交错分配（wg 归卡 wg % gpu_num）
+    int gpu_num = 0;
+    cudaGetDeviceCount(&gpu_num);
+    if (gpu_num > 1)
+        return solve_multi_gpu(n, gpu_num, numWg, const_data, jkl_queens_arr);
 
     // Step 5: 分配GPU内存并传输数据
     Constellation4 *d_const;
