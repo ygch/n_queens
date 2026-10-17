@@ -649,6 +649,31 @@ Mechanism: lead ~= 1 - W_c/(W_r*kappa). Both sides' resident warps step down wit
 
 **Impact**: branch choice unchanged (the current branch has reload only); **the N=24 run regains its value as adjudicator** of "shrinkage continues vs ladder rebound" and of the true kappa (reload 3.4h; full A/B ~7h).
 
+## Attempt #41: Re-calibrated 8x5090 estimates for N=24-28 from the 16-PPU measurements (with the systematic main config-downgrade penalty, 2026-10-17)
+
+Context: the user validated all three lines on 16 PPUs (counts exact; logs+xlsx in the repo root) and provided two facts: (1) the PPU main build has PTX replaced by plain CUDA (~7% slower); (2) main's 26->27 step dropped one configuration, costing >10% beyond the solution-ratio growth, and 27->28 will pay another >10% - a systematic penalty, not noise.
+
+**PPU -> 8x5090 calibration (two independently verifiable factors)**
+- reload line: PPU / 8x5090 = **1.26** (three points: 169.6/132.2=1.28, 1586.7/1253=1.27, 15409/12292=1.25);
+- main line: PPU(no-PTX) / 8x5090 = **1.62** (N=23: 376.4s / 1.62 = **232.3s vs the paper's measured 232.7s - 0.2%**; includes the 7% PTX loss and a 1.51 hardware factor);
+- cross-check: the PPU is 1.28x more favorable to reload than to main (1.62/1.26), consistent with reload beating capture by 1.8-1.9x on PPU.
+
+**Law check (PPU)**: 23->24 = x9.36 (solution ratio 9.39), 24->25 = x9.71 (9.70) - zero drift; extrapolate directly with solution ratios.
+
+**Re-estimate (8x5090)**
+
+| N | reload line (rows=7) | main line |
+|---|---|---|
+| 24 | 1259s = 21.0min | 2205s = 36.8min (measured) |
+| 25 | 12229s = 3.40h | 21880s = 6.08h (measured) |
+| 26 | 1.43d | 2.5d (measured) |
+| 27 | 15.1d | 28.4d (measured; includes the >=10% config penalty) |
+| 28 | **164d ~ 5.4 months** | **~340d ~ 11.2 months** (28.4d x 10.9 x 1.10; matches the paper's 340d = 28.4 x 10.52 x 1.14) |
+
+**Correction to #38**: main@28 should not use "solution ratio x 1.00-1.08 drift" (10.2-11.0 months) - the config downgrade is a systematic >=10% term per step; with it, ~11.2 months. The reload line has no config wall (block=32, 12.3KB/block at N=28), so it keeps the clean solution-ratio extrapolation: **N=28 ~ 5.4 months**. The gap between the two lines widens to **~2.1x** at N=28.
+
+(16-PPU equivalents = the table x1.26: 24=26.5min, 25=4.28h, 26=1.8d, 27=19.0d, 28~6.8 months - matching the measured 24/25 exactly.)
+
 ## Measured Optimization Space Map (2026-10)
 
 An instrumented campaign (per-thread iteration counters, warp-level analysis, occupancy queries, SASS dumps) bounded what remains after #12:
