@@ -864,6 +864,22 @@ New log (8-GPU box, block=64):
 
 Direction unchanged (the N=22 r6/r7 gap is host tax; N>=24 decided by the ladder); wording corrected per the measurement.
 
+## Attempt #54: 8x4090 campaign close-out review (capture-line completion, balanced/nobalanced, host-tax series, 2026-10-17)
+
+4090 experiments ended (budget). Reviewed the new logs (both branches on 8x4090 + the logs/ balanced comparison) and the updated Excel:
+
+**1) Capture line (faf-cuda) on 8x4090** (kernel times): r6/r7 = 1.5/1.3s (N=20), 4.1/3.6s (21), 24.9/22.2s (22), 208.2/198.4s (23), 1945.7s (24, r6; the Excel's r7@24=1882s calc has no matching run in the log). Since the capture kernel's shared memory is preset-independent, its r7 gains are NOT residency steps but finer-granularity tail/balance effects (3-11%). Reload-vs-capture kernel gap: -17% (21), -15% (22), -12% (23), -4% (24 r6) - shrinking to single digits at larger N on NVIDIA (1.8-1.9x on the PPU).
+
+**2) balanced (mod equal split) vs nobalanced (fraction table)** (main, 8x4090, r6): mod spreads are uniformly lower (1.0/3.4/4.8/6.6% vs 5.5/12.6/19.9/16.4%), yet at N=23 mod's makespan was 5.8% worse (328.8 vs 310.9s) - single runs, inconsistent direction, needs repetition to settle. The production reload line only has mod; the PPU spread is 0.4% => no weighting needed.
+
+**3) Host-tax series (reload r7, host-gen)**: 4.88s (22, 18% of calc), 7.62s (23, 3.9%), 11.73s (24, 0.7%), 16.59s (25, 0.09%) - negligible from N=26 on (#52/#53 closed).
+
+**4) Finish spreads**: reload r7@24/25 = 4.6%/4.5%; r6@24 = 5.8%; capture r6@24 = 8.0%. PPU r7 = 0.4-0.5%.
+
+**5) Excel check**: reload rows all match the logs; the capture r7@24=1882s row has no matching run in the faf-cuda log (it ends at r6@24) - confirm the source.
+
+**8x5090 preflight (the only remaining experiment, ~1-1.5h)**: N=24 with r7/block32 (predicted ~22min; calibrates the 5090/4090 ratio 0.775 and the spread) + r6/block32 (verifies the ladder step; predicted ~28-30min); optionally block=64. Then go straight to N=26 (~40h) -> (optional N=27 ~19.7d, count known) -> N=28 (r7, ~215d ~ 7 months).
+
 ## Measured Optimization Space Map (2026-10)
 
 An instrumented campaign (per-thread iteration counters, warp-level analysis, occupancy queries, SASS dumps) bounded what remains after #12:
