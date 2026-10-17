@@ -700,6 +700,24 @@ Mechanism: more GPUs -> fewer subproblems per GPU -> larger relative variance of
 - 8x5090: 6 (paper-validated);
 - 16 PPU: 7 (measured). #41's calibration (PPU@7 / 5090@6) was already optimal-vs-optimal; numbers unchanged.
 
+## Attempt #44: reload multi-GPU measurements on 8x4090 (N=20-23, rows 6/7, 2026-10-17)
+
+User measurements (second multi-GPU platform besides 16 PPUs):
+
+| N | reload r6 | reload r7 | paper 8x4090 (main r6) | single 4090 (reload r6) |
+|---|---|---|---|---|
+| 20 | **2.19** | 4.04 | 2.58 | 2.15 |
+| 21 | **4.19** | 7.49 | 6.16 | 16.49 |
+| 22 | **22.3** | 27.2 | 37.46 | 148 |
+| 23 | **184.7** | 194 | 308.5 | 1352.4 |
+
+Conclusions:
+- **rows=6 wins everywhere on 8x4090** (r7 is 5-84% slower) - the 8-GPU tier of the "preset rises with GPU count" rule is 6 (matches the paper; 7 is the 16-PPU tier).
+- **Multi-GPU speedup vs single 4090**: 0.98x / 3.94x / 6.64x / 7.32x. N=20/21 is swamped by a **~1.8s constant** (8 CUDA contexts/module init + generation + gather/copies): total ~= kernel/8 + 1.8s. At N>=22 the compute-only scaling is 7.3/8 = **92%**.
+- **vs paper's 8x4090 (main)**: 1.67-1.68x faster at N>=22 (matches the single-card line ratio 1.66-1.73x); N=20 only 1.18x - both sides swamped by the ~2s overhead.
+- **Independent cross-check of the 8x5090 estimate**: 8x4090 x 0.79 (mean of the paper's eight 8-GPU 5090/4090 points): N=23 ~ 146s vs #41's ~132-135s - within 8-10%.
+- **16 PPU ~= 8x4090** (3-17% apart at N<=22; PPU 169.6s at N=23 is 9% faster) - consistent with "each PPU ~ 0.5x a 4090"; the PPU r7 gain starts to show at N=23.
+
 ## Measured Optimization Space Map (2026-10)
 
 An instrumented campaign (per-thread iteration counters, warp-level analysis, occupancy queries, SASS dumps) bounded what remains after #12:
