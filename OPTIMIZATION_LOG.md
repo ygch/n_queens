@@ -795,6 +795,29 @@ Derivation: the entry at depth i stores cur with exactly `init_pc + i` bits -> `
 **Root cause (important structural fact)**: the reload stack **collapses** - when a parent's `residual == 0`, `top--` lets the child overwrite the parent's slot (the "child replaces exhausted parent" optimization from #20). Collapse decouples the entry index from the depth, so the identity fails after any collapse. => **the stored POPC is the necessary price of the collapse optimization** and cannot be replaced by index arithmetic.
 Reverted (source restored to HEAD, binary restored; N=19 verified). Direction closed.
 
+## Attempt #49: measured accidental equivalence in the reload tree - nothing left after the D4 quotient (2026-10-17)
+
+Computational-equivalence pairs in the faf-reload constellation set (state = `(ld, rd, col, start, j, k, l)` identical <=> residual subtrees mergeable):
+
+| N | pairs/elements | share | vs main tree (#29) |
+|---|---|---|---|
+| 20 | 90 (180) | 0.0131% | 0.21-0.48% |
+| 24 | 152 (304) | 0.0053% | - |
+| 28 | 230 (460) | 0.0025% | - |
+
+Verdict: after the D4 quotient the residual equivalence is 1-2 orders of magnitude below the main tree (main never did the D4 quotient; its duplicates included D4-class pairs) and decreases with N. Merging everything saves <=0.01%; deep-state memoization is even less worthwhile on the reload tree. "No residual symmetry/equivalence after D4" holds more strongly for the reload branch.
+
+## Attempt #50: N=25 (rows=7) on 8x4090 = 18,384s - 9.3% above the naive solution-ratio extrapolation, but exact under the residency-step model (2026-10-17)
+
+Measured: 8x4090, N=25, rows=7, block=32 -> **18,384 s (5.11 h)**. The earlier "1733 x solution ratio 9.70 = 16,817s (4.67h)" extrapolation **missed the step**:
+
+- preset7 maxd: 19 at N=24 -> **10 resident blocks** (10 warps); 20 at N=25 -> **9 blocks (-1 warp ~ -10%)**;
+- ladder-model prediction = 1733 x 9.70 x (10/9) = **18,686 s**; measured 18,384 (**-1.6%**) - matches;
+- this also falsifies the +1KB/block-reservation convention (which predicts no step at 25) and supports the 96KB no-reserve convention (#45).
+
+Action: at N=25, r6 has maxd=21 -> still **9 blocks** (tied with r7) -> r6 predicted 18,117s, plus the "r6 ~3-5% faster in tie cases" (N=23 evidence) -> **~17.2-18.1k (2-6% faster than the r7 measurement)**. **Prefer rows=6 at N=25** (untested; worth verifying if re-running).
+Updated 8x4090/5090 preset table: **24->7, 25->6, 26->7, 27->6, 28->6** (alternating with the 96KB ladder; the PPU's ladder differs - 25+ still unmeasured there).
+
 ## Measured Optimization Space Map (2026-10)
 
 An instrumented campaign (per-thread iteration counters, warp-level analysis, occupancy queries, SASS dumps) bounded what remains after #12:
