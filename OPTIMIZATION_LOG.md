@@ -749,6 +749,19 @@ Updated guidance:
 - 8x5090 (same arch family): likely r7 for 24-28 as well - **the N=24 8x5090 estimate moves from 21min (r6) to ~21-23min (r7)**;
 - the two anchor chains differ ~9% at N=24 (PPU 1586.7s vs 8x4090 1733s; the 16-PPU rig is relatively stronger at large N).
 
+## Attempt #46: block-size A/B at N=24 on 8x4090 (32 vs 64) - 32 wins (2026-10-17)
+
+User measurement (8x4090, N=24, rows=6, calc):
+
+| block | time | delta |
+|---|---|---|
+| 32 (production default) | 1867 s | - |
+| 64 | 1968 s | **+5.4% slower** |
+
+Conclusion: **the block=32 projection for 24-28 gets its first direct measurement support at N=24** (previously only the N=23 -16% and the ladder model). The per-N table stays 24-28 -> 32.
+
+Note: measured at rows=6; with rows=7 (maxd=19) the 32/64 residency is closer (10 vs 10 warps under the 96KB convention), but 32 is already the better side - and the fastest N=24 combo (r7 + block32 = 1733s) uses 32 anyway.
+
 ## Measured Optimization Space Map (2026-10)
 
 An instrumented campaign (per-thread iteration counters, warp-level analysis, occupancy queries, SASS dumps) bounded what remains after #12:

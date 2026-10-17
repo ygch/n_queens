@@ -39,6 +39,6 @@ This branch (`faf-cuda-reload`) has a **single production kernel — the reload 
 ## Gotchas
 
 - Stack layout: lane `l`'s level `e` sits at `sbase + e*32` with `sbase = (lid>>5)*(S*32) + (lid&31)` — never break the stride-32 (bank conflicts).
-- N=24–28 production config (reload @ block size 32) is **κ-model projected, not yet measured** — validate with one N=24 run before starting any long run.
+- N=24–28 production config (reload @ block size 32) was κ-model projected; block=32 is now **validated at N=24 on 8×4090** (beat block=64 by 5.4%, rows=6). N=25–28 still projected.
 - Capture-kernel traps — `__funnelshift_l(lo, hi, s)` argument order; anti-revisit mask `free &= ~(queen + direction - 1)` — apply only on `faf-cuda`.
 - NQueensFAF reference project is at `../NQueensFAF/` (OpenCL baseline). `tools/nqueens_replica.py` is the per-frame Python oracle used to validate kernel semantics.
