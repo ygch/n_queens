@@ -762,6 +762,28 @@ Conclusion: **the block=32 projection for 24-28 gets its first direct measuremen
 
 Note: measured at rows=6; with rows=7 (maxd=19) the 32/64 residency is closer (10 vs 10 warps under the 96KB convention), but 32 is already the better side - and the fastest N=24 combo (r7 + block32 = 1733s) uses 32 anyway.
 
+## Attempt #47: r6/r7 share the same imbalance source on 8x4090 - per-card speed differences (2026-10-17)
+
+Exact accounting of the two N=24 runs on 8x4090 (user logs):
+
+| run | spread | spread/mean | **slowest/mean (real loss)** |
+|---|---|---|---|
+| r6 (1867s) | 107.7s | 5.88% | **+1.94%** |
+| r7 (1733s) | 78.9s | 4.68% | **+1.94%** |
+
+**Correction**: the earlier inference that "1.5-1.9 points of r7's lead come from balance" is falsified - the 7.2% lead comes entirely from the residency step (#45); the imbalance loss is unchanged.
+
+Per-card relative durations (both runs, deviation from each run's mean):
+
+| gpu | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 |
+|---|---|---|---|---|---|---|---|---|
+| r6 | +0.6% | +0.7% | +1.5% | -2.1% | +1.0% | +1.9% | +0.4% | **-3.9%** |
+| r7 | -0.5% | +0.1% | +1.6% | -1.1% | -1.0% | +1.6% | +1.9% | **-2.7%** |
+
+Highly consistent across runs (gpu7 always fast, gpu2/5 always slow) -> the residual imbalance is dominated by **persistent 2-4% per-card speed differences** (clocks/thermals/power/slots), not workload granularity: r7's 11x more samples did not smooth it. Contrast: the homogeneous 16-PPU server shows only 0.49% spread at r7.
+
+Recommendations: (1) check `nvidia-smi -q -d CLOCK,POWER` during a run to rule out thermal/power issues (free ~1.9%); (2) if it is genuine card variance, weighted per-card assignment can recover up to 1.9% (not worth it on the 16-PPU production rig, whose spread is 0.4%); (3) a cross-GPU dynamic queue is the theoretical fix but not worth 2%.
+
 ## Measured Optimization Space Map (2026-10)
 
 An instrumented campaign (per-thread iteration counters, warp-level analysis, occupancy queries, SASS dumps) bounded what remains after #12:
