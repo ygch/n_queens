@@ -25,7 +25,7 @@ This branch (`faf-cuda-reload`) has a **single production kernel — the reload 
 - The kernel family is **throughput-bound (IPC-limited)**, not latency-bound. RTX 4090 has 4 warp schedulers per SM; demand far exceeds supply. Increasing occupancy does NOT help by itself.
 - The reload kernel's per-trip full-state reload **is** the optimal form — register-carried / delta-stack variants were refuted five times (warp-divergence tax; the compiler schedules the plain unconditional-reload loop better).
 - Reload vs capture (same-session A/B): −12…−13% at N=19–21, −8.1% at N=22 (149.1s vs 162.2s), −8.0% at N=23 (1352.4s vs 1469.7s). κ model: reload ≈ 3.6–4.0× per-warp throughput; flip points are ruled by per-block smem → resident blocks → resident warps.
-- `preset_queens=6` is optimal for N=20 (tested 4–8; note N=6/7 require preset ≤ N−2).
+- The optimal `preset_queens` shifts up with GPU count: 5 for the paper's single-GPU config3, 6 for our reload line on a single GPU (4–8 tested at N=20) and for the paper's 8-GPU runs, 7 for 16 PPUs at N≥22 (measured). Note N=6/7 require preset ≤ N−2.
 - See `OPTIMIZATION_LOG.md` and `优化日志.md` for the full attempt record (#1–#34).
 
 ## Branch Strategy

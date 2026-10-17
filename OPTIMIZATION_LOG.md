@@ -689,6 +689,17 @@ Parameter status (reload branch):
 - Exact-depth stack / unroll x2 / padding 384: verified.
 Remaining optional check: block 32 vs 64 at N=24 (NVIDIA ~7h for both; PPU ~26.5min each).
 
+## Attempt #43: optimal preset shifts up with GPU count (5->6->7) - correcting #42's wording (2026-10-17)
+
+User correction (with existing evidence): the optimal pre-placement rows increase monotonically with the GPU count - single GPU optimum = **5** (paper README: "single GPU, N<=22: pre-placing first 5 rows with configuration3"); 8 GPUs (4090/5090) = **6** (all paper 8-GPU tables use preset 6/config2); 16 PPUs = **7** (measured, N>=22). This is not PPU-specific.
+
+Mechanism: more GPUs -> fewer subproblems per GPU -> larger relative variance of per-GPU workload -> finer decomposition needed; each extra preset row multiplies the subproblem count by x10-15 and makes trees smaller/more uniform -> better balance and (on PPU) better per-node efficiency. Single GPU is the opposite (fewer, longer trees minimize per-subproblem overhead) - optimum stays at 5-6.
+
+**Correcting #42's conclusion**: the N=22 single-4090 A/B (rows6=151.8s vs rows7=164.1s) only shows that the *single-GPU* optimum is <=6; it does NOT imply 7 is bad on 8x5090 - the multi-GPU optimum is set by the GPU count. Action:
+- single 4090 (reload line): 6 (4-8 measured; 5 is the main+config3 result);
+- 8x5090: 6 (paper-validated);
+- 16 PPU: 7 (measured). #41's calibration (PPU@7 / 5090@6) was already optimal-vs-optimal; numbers unchanged.
+
 ## Measured Optimization Space Map (2026-10)
 
 An instrumented campaign (per-thread iteration counters, warp-level analysis, occupancy queries, SASS dumps) bounded what remains after #12:
