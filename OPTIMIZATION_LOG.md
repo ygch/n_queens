@@ -818,6 +818,21 @@ Measured: 8x4090, N=25, rows=7, block=32 -> **18,384 s (5.11 h)**. The earlier "
 Action: at N=25, r6 has maxd=21 -> still **9 blocks** (tied with r7) -> r6 predicted 18,117s, plus the "r6 ~3-5% faster in tie cases" (N=23 evidence) -> **~17.2-18.1k (2-6% faster than the r7 measurement)**. **Prefer rows=6 at N=25** (untested; worth verifying if re-running).
 Updated 8x4090/5090 preset table: **24->7, 25->6, 26->7, 27->6, 28->6** (alternating with the 96KB ladder; the PPU's ladder differs - 25+ still unmeasured there).
 
+## Attempt #51: re-estimate for 8x4090/5090 at N=25-28 (solution ratio x residency step; corrects #41 which omitted steps, 2026-10-17)
+
+Method: anchor on the 8x4090 measurements (N=24: r6=1867s/9 blocks, r7=1733s/10 blocks; N=25: r7=18,384s measured/9 blocks), extrapolate by [solution ratio x residency-step factor]; 8x5090 = 8x4090 x 0.775 (mean of the paper's 8-GPU 5090/4090 points; range 0.75-0.83). Block ladder at 96KB effective smem, WG32: rows=6 -> 9/9/8/8/8 (N=24-28); rows=7 -> 10/9/9/8/8.
+
+| N | 8x4090 r6 | 8x4090 r7 | 8x5090 r6 | 8x5090 r7 | pick |
+|---|---|---|---|---|---|
+| 25 | 5.03 h | **5.11 h (measured)** | 3.90 h | 3.96 h | **6** (marginal) |
+| 26 | 57.2 h | 51.6 h | 44.4 h | 40.0 h | **7 (-10%)** |
+| 27 | 25.1 d | 25.5 d | 19.5 d | 19.7 d | **6** (tie, r6 edge) |
+| 28 | **274 d** | 278 d | 212 d | 215 d | **6** |
+
+**Correction to #41**: its 8x5090 column omitted the steps (r7 loses one block at N=25 and N=27, cumulative x1.25), overestimating N=27/28 by ~30% - the 8x5090 N=28 estimate goes from 5.4 months to **6.8-7.3 months** (scale band 0.75-0.83 = 208-222 days; 212 days at 0.775).
+
+Assumptions/risks: (1) the 5090's smem/SM may differ from Ada's 100KB, shifting the ladder and possibly the per-N pick; (2) the "r6 is 3-5% faster in tie cases" edge (N=23 measured) is not included - r6 at 25/27/28 may be another 0-5% better; (3) the 27->28 solution ratio 10.9 is a trend estimate.
+
 ## Measured Optimization Space Map (2026-10)
 
 An instrumented campaign (per-thread iteration counters, warp-level analysis, occupancy queries, SASS dumps) bounded what remains after #12:
