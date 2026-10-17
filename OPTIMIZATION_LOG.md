@@ -718,6 +718,37 @@ Conclusions:
 - **Independent cross-check of the 8x5090 estimate**: 8x4090 x 0.79 (mean of the paper's eight 8-GPU 5090/4090 points): N=23 ~ 146s vs #41's ~132-135s - within 8-10%.
 - **16 PPU ~= 8x4090** (3-17% apart at N<=22; PPU 169.6s at N=23 is 9% faster) - consistent with "each PPU ~ 0.5x a 4090"; the PPU r7 gain starts to show at N=23.
 
+## Attempt #45: preset reversal at N=24 on 8x4090 (r7 wins) - the residency-step mechanism (2026-10-17)
+
+New measurements (8x4090, block=32):
+
+| N | r6 | r7 | winner |
+|---|---|---|---|
+| 20 | 2.19 | 4.04 | 6 |
+| 21 | 4.19 | 7.49 | 6 |
+| 22 | 22.3 | 27.2 | 6 |
+| 23 | 184.7 | 194 | 6 |
+| **24** | **1867** | **1733** | **7 (-7.2%, reversal)** |
+
+Mechanism: preset 6->7 reduces maxd by exactly 1 (N-4 -> N-5, saving 512B per warp). Resident blocks at WG32 under the 96KB-effective-smem convention (#36):
+
+| N | maxd 6/7 | blocks 6/7 |
+|---|---|---|
+| 23 | 19/18 | 10/10 |
+| **24** | **20/19** | **9/10 <- steps diverge** |
+| 25 | 21/20 | 9/9 |
+| 26 | 22/21 | 8/9 (next divergence) |
+| 27 | 23/22 | 8/8 |
+| 28 | 24/23 | 8/8 |
+
+N=24 is the first divergence: r6 falls from 10 to 9 blocks (-1 warp/SM ~ -11%), r7 keeps 10 -> reversal. Matches the measured flip point. Cross-check with the solution law: r6's 23->24 = x10.11 (+7.7% over 9.39), r7's = x8.93 (-4.9%) - "one falls off a step, the other doesn't".
+
+Updated guidance:
+- 8x4090: **r6 for N<=23, r7 for N>=24** (model: tie at 25, r7 again at 26, ~tie 27-28);
+- the N=22 flip on 16 PPUs is the same mechanism shifted by a different smem budget/hardware - #43's "rises with GPU count" stands, with the mechanism clarified as maxd residency steps;
+- 8x5090 (same arch family): likely r7 for 24-28 as well - **the N=24 8x5090 estimate moves from 21min (r6) to ~21-23min (r7)**;
+- the two anchor chains differ ~9% at N=24 (PPU 1586.7s vs 8x4090 1733s; the 16-PPU rig is relatively stronger at large N).
+
 ## Measured Optimization Space Map (2026-10)
 
 An instrumented campaign (per-thread iteration counters, warp-level analysis, occupancy queries, SASS dumps) bounded what remains after #12:
