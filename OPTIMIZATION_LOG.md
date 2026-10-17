@@ -833,6 +833,21 @@ Method: anchor on the 8x4090 measurements (N=24: r6=1867s/9 blocks, r7=1733s/10 
 
 Assumptions/risks: (1) the 5090's smem/SM may differ from Ada's 100KB, shifting the ladder and possibly the per-N pick; (2) the "r6 is 3-5% faster in tie cases" edge (N=23 measured) is not included - r6 at 25/27/28 may be another 0-5% better; (3) the 27->28 solution ratio 10.9 is a trend estimate.
 
+## Attempt #52: N=28 pick corrected (r6 on the 96KB knife-edge) + explaining the N=22 r6/r7 crossover (host-pipeline tax, 2026-10-17)
+
+**1) N=28 pick**: r6's 8-block demand = 8x12,288 = **98,304B, exactly the 96KB convention**; measurements only prove effective smem **>=97,280B** (r7@24's 10-block demand, which indeed won by 7.2%), not >=98,304B. If the effective value is 97.3-98.3KB, r6@28 drops to 7 blocks (-12.5%); r7 needs only 94,208B (4KB margin). => **use rows=7 at N=28** (corrects #50/#51's "28->6"; 8x4090 ~278d, 8x5090 ~215d). Others unchanged: 24->7, 25->6, 26->7, 27->6.
+
+**2) Why r7 with one extra block is still slower at N=22**: calc time is end-to-end and includes a **host pipeline that grows linearly with the subproblem count** (generation / sort+padding / const_data build / multi-GPU gather / H2D / jkl table / final weighted sum). Measured non-kernel overhead:
+
+| platform | N=24 r7 (66.8M subs) non-kernel | rate | extrapolated N=22 r7 (29M) | N=22 r6 (3.16M) |
+|---|---|---|---|---|
+| 8x4090 box | 11.7s | ~0.175 s/M | ~**5.1s** | ~0.55s |
+| 16 PPU | 7.7s | ~0.116 s/M | ~3.4s (measured 3.12s) | ~0.4s |
+
+At N=22 r7 pays ~4.6s more host time than r6, while the extra resident warp saves only ~2s on a ~20s kernel -> net ~+2.6s (plus startup/noise; measured 27.2 vs 22.3). On the PPU the host pipeline is halved and the CPU is ~2x faster (gen 31M/s vs 66M/s) -> r7@22 measured 7.7% faster.
+
+Implication: the crossover = ladder gain vs host tax; per +1 N the kernel grows x9-10 while host cost grows x1.4 -> from N=24 the host tax is <1% and the r6/r7 choice is decided by the ladder alone. The N=22 r6/r7 difference must NOT be read as "the kernel is 20% slower" - at that size the kernel difference is unresolvable (+-2-3s).
+
 ## Measured Optimization Space Map (2026-10)
 
 An instrumented campaign (per-thread iteration counters, warp-level analysis, occupancy queries, SASS dumps) bounded what remains after #12:
