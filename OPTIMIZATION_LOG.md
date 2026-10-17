@@ -784,6 +784,17 @@ Highly consistent across runs (gpu7 always fast, gpu2/5 always slow) -> the resi
 
 Recommendations: (1) check `nvidia-smi -q -d CLOCK,POWER` during a run to rule out thermal/power issues (free ~1.9%); (2) if it is genuine card variance, weighted per-card assignment can recover up to 1.9% (not worth it on the 16-PPU production rig, whose spread is 0.4%); (3) a cross-GPU dynamic queue is the theoretical fix but not worth 2%.
 
+## Attempt #48: row-identity simplification (removing the per-iteration POPC) - refuted by stack collapse (2026-10-17)
+
+Motive (fresh review): if `jrow_base + popc(cur)` is identically `start + top`, one POPC per iteration can be removed and the jkl LDS address dependency becomes an IADD instead of a POPC (ncu: 33.9% ALU-chain stalls).
+
+Derivation: the entry at depth i stores cur with exactly `init_pc + i` bits -> `popc(cur) = init_pc + top`; row = `start + top`; the leaf test becomes `start + top == N-2`.
+
+**Measured: compiles, but counts are wrong for N=8-20** (N=8: 76 vs 92; N=20: 124408 vs 39029188884).
+
+**Root cause (important structural fact)**: the reload stack **collapses** - when a parent's `residual == 0`, `top--` lets the child overwrite the parent's slot (the "child replaces exhausted parent" optimization from #20). Collapse decouples the entry index from the depth, so the identity fails after any collapse. => **the stored POPC is the necessary price of the collapse optimization** and cannot be replaced by index arithmetic.
+Reverted (source restored to HEAD, binary restored; N=19 verified). Direction closed.
+
 ## Measured Optimization Space Map (2026-10)
 
 An instrumented campaign (per-thread iteration counters, warp-level analysis, occupancy queries, SASS dumps) bounded what remains after #12:
