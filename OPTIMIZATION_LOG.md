@@ -674,6 +674,21 @@ Context: the user validated all three lines on 16 PPUs (counts exact; logs+xlsx 
 
 (16-PPU equivalents = the table x1.26: 24=26.5min, 25=4.28h, 26=1.8d, 27=19.0d, 28~6.8 months - matching the measured 24/25 exactly.)
 
+## Attempt #42: Cross-hardware check of preset rows (N=22 A/B) and the parameter status for N=24-28 (2026-10-17)
+
+Motive: on 16 PPUs, rows=7 beat 6 by 8-17% for N>=22, while the reload branch defaults to rows=6 - does it transfer to NVIDIA?
+
+Exact stack depth (host program, preset 6 vs 7): preset7 sets min_start 6->4, so **maxd = N-5** (one slot less per warp: saves 512B; may add one resident block at N>=26); subproblem counts scale x9.8-15.3.
+
+**N=22 A/B (single 4090, calc)**: rows=6 = **151.77s**, rows=7 = **164.05s (+8.1% slower)** - consistent with the old N=20 test (6 faster by 8.6%). Verdict: **the rows=7 gain is PPU-specific and does NOT transfer to NVIDIA**; keep rows=6 on 4090/5090.
+
+Parameter status (reload branch):
+- **preset rows=6**: locked for NVIDIA (N=20 and N=22 evidence); PPU uses 7 (measured optimal there).
+- **block size 24-28 = 32**: model-projected, NOT measured at 24+ (N=23 measured -16% supports it; at 27-28 the model predicts 8 vs 6 warps for 32 vs 64).
+- **Multi-GPU mod split**: verified on 16 PPUs (exact counts, 0.4-1.2% finish spread).
+- Exact-depth stack / unroll x2 / padding 384: verified.
+Remaining optional check: block 32 vs 64 at N=24 (NVIDIA ~7h for both; PPU ~26.5min each).
+
 ## Measured Optimization Space Map (2026-10)
 
 An instrumented campaign (per-thread iteration counters, warp-level analysis, occupancy queries, SASS dumps) bounded what remains after #12:
