@@ -880,16 +880,64 @@ Direction unchanged (the N=22 r6/r7 gap is host tax; N>=24 decided by the ladder
 
 **8x5090 preflight (the only remaining experiment, ~1-1.5h)**: N=24 with r7/block32 (predicted ~22min; calibrates the 5090/4090 ratio 0.775 and the spread) + r6/block32 (verifies the ladder step; predicted ~28-30min); optionally block=64. Then go straight to N=26 (~40h) -> (optional N=27 ~19.7d, count known) -> N=28 (r7, ~215d ~ 7 months).
 
+## Attempt #55: single-GPU SASS/load-balance experiments - the oracle balance ceiling (-32%) is real, but no cheap predictor exists; K constellations/thread and leaf inlining both refuted (2026-10-18)
+
+Focused campaign on the warp lane-tail waste (space map item 1). Every count was checked against known values (N=8/10/12/20/21).
+
+**1. Two-row inline leaf counting (do-while inner loop)**: correct but **+48%** (2925 vs 1980ms). A per-node inner loop introduces BSSY/BSYNC reconvergence points; lanes can no longer slide, and even a 15-instruction/candidate body cannot recover it.
+
+**2. Two candidates per leaf iteration** (no inner loop, predicated): **+33%** (2640 vs 1980ms). SASS shows nvcc choosing branches instead of predication for multi-way if/else in the hot loop; loop body 33 -> 56 instructions per iteration.
+
+**3. Moving stack pointer** (drop the 3 address instructions per iteration): first implementation produced 0 solutions - `sp -= 32` at the root pop walks out of bounds (C++ UB), and nvcc generated the inverted pointer update. A branchless `sp += 32*(descend-pop)` form gives 32 SASS/iteration (vs 33) but needs extra SEL/dual IMAD; <3%, dropped.
+
+**4. Oracle balance ceiling measured**: added a per-thread iteration counter (`-DNQ_COUNT_ITERS`, analysis only). N=20 total iterations **727.8G**; warp max/mean of iteration counts **1.52** (the solution-count proxy reads 2.02, an overestimate). Reordering constellations inside jkl groups by the previous run's iteration counts: **1998 -> 1358ms (-32.1%)**, counts exact. The space-map item-1 bound is now measured, not estimated.
+
+**5. Still no cheap predictor**: 2-row shallow expansion vs iterations: Spearman ~ **-0.08**; within a group, `i` (row-0 queen column) explains 12% of the within-group variance (cross-half correlation 0.996: center i expensive, edge cheap), but sorting by i only recovers 1.508 -> 1.482; sorting by (i, true cost) gives 1.205.
+
+**6. K constellations per thread** (K=1/4/8/16, N=20): 1978 / 1972 / 2141 / 2475ms. The outer K loop **re-synchronizes lanes at every constellation boundary**, so each warp round is still the max of 32 random constellations (SIMT lockstep); K only shrinks the block count (at K=16, N=20 has only 750 blocks, less than one wave). Default K=1. This also refutes space-map item 6: a dynamic atomic queue has exactly the same per-round structure as K items; max/mean does not depend on task granularity as long as the task boundary is a warp sync point.
+
+**7. Preset 7/8 re-measured** (same build): N=20 kernel 2265 / 2614ms vs 2011ms at preset 6, consistent with space-map item 5.
+
+**8. Net win**: padding alignment tightened from 384 to `block_size*K` (fewer pseudo threads) + hoisting L/last/jkl loads + the K=1 restructure: N=20 **1976 -> 1914ms (-3.1%)**, N=21 **16341 -> 15843ms (-3.0%)**. Block-size table re-checked: N=20 b=128 best (1937; b=32 1998, b=64 2097); N=21 b=32 best (15923; b=64 16852).
+
+**Conclusion**: the remaining ~30% requires a scheme that lets lanes truly slide - fine-grained tasks + stack checkpointing (preemptible DFS with task stacks in global memory) - or a high-accuracy cost predictor (shown not to exist). Static sorting, K items, and deeper presets are all out.
+
+## Attempt #56: preemptible DFS + stack checkpoints + per-block task queue - N=20/21/22 measured -26.3%/-21.3%/-25.8% on one GPU (2026-10-18)
+
+Implements the only remaining big lever identified in #55 (warp lane-tail waste 1.52x; oracle ceiling -32%).
+
+**Design**
+- Each block owns `block_size*K` same-jkl constellations, held in a per-block FIFO ring in global memory (`2*cap+3` ints).
+- Each round: every lane atomically pops one task, restores its checkpoint (or initializes the root state), runs a `slice`-iteration budget on its private smem slab, then - if unfinished - writes {top stack levels, partial solution count, top} back to its global checkpoint and re-enqueues. Two `__syncthreads()` per round order the enqueues/accounting.
+- The smem layout is unchanged (S int4 levels per lane, zero bank conflicts); queue and checkpoints live in global memory, so occupancy is untouched.
+
+**Three findings from the implementation**
+1. **The task pool shrinks linearly as tasks complete**: with cap = block_size it drains from full-lane occupancy to zero and most lanes starve late in the run (12% slower than the baseline). K=4-6 make the pool much deeper than the lane count and deliver the balance win (N=21 K sweep 4/6/8/12 -> 12661/12592/12790/13333ms).
+2. **`__launch_bounds__(MAX_BLOCK, 12)` was a trap**: the 12-blocks/SM constraint capped registers at 42, so the compiler rematerialized the lane/warp base every iteration (+6 instructions, loop 33 -> 39). Occupancy is actually smem-bound (register budget ~170); dropping minBlocks gives 55 registers and a 33.5-instruction loop, N=20 1655 -> 1440ms.
+3. Checkpoint/queue overhead is small: slice 4096-32768 gives 1428-1446ms, so slicing itself is not the bottleneck.
+
+**Measured (same-session A/B; every count checked: N=6/7/8/10/12/13/14/20/21/22)**
+
+| N | baseline (post-#55) | queue version | gain |
+|---|---|---|---|
+| 20 | 1938.8 ms | **1428.6 ms** | -26.3% |
+| 21 | 15843 ms | **12459.9 ms** | -21.3% |
+| 22 | 145957 ms | **108258 ms** | -25.8% |
+
+The N=20 oracle bound was 1358ms (#55), so the implementation is within 5% of it. Parameters: block table unchanged (20 -> 128, 22 -> 64, 21/23+ -> 32; N=22 with b=32 is worse at 116.2s), K=6, slice=8192. Checkpoint buffers = cnt x maxd x 16B (904MB at N=22; ~4.8GB at N=26, ~11GB at N=28; divided by GPU count in multi-GPU).
+
+**Projection**: 8x5090 N=26 ~ 40h x 0.74 ~ **29.6h**, meeting the <=30h gate. Caveat: the multi-GPU path was updated (per-GPU checkpoint/queue arrays) but cannot be tested on this single-GPU box; run an N=24 preflight on 8 GPUs first.
+
 ## Measured Optimization Space Map (2026-10)
 
 An instrumented campaign (per-thread iteration counters, warp-level analysis, occupancy queries, SASS dumps) bounded what remains after #12:
 
-1. **Warp lane-tail waste = 1.52x — the biggest single loss.** A warp runs until its slowest lane finishes; measured warp-max/warp-mean of per-subproblem iteration counts: median 1.49. Perfect balancing would take N=20 from 2172ms to ~1430ms — but it needs a size oracle.
+1. **Warp lane-tail waste = 1.52x — the biggest single loss (captured by #56).** A warp runs until its slowest lane finishes; measured warp-max/warp-mean of per-subproblem iteration counts: median 1.49 (#55 re-check: 1.52). #55 measured the bound with an iteration-count oracle reorder: 1998 -> 1358ms (-32.1%); #56 implemented it with preemptible DFS + stack checkpoints + a per-block task queue: 1938.8 -> 1428.6ms (-26.3% at N=20), within 5% of the oracle, now the production kernel.
 2. **No cheap size oracle exists.** Rank correlation with true per-subproblem iterations: start row -0.35; `popc(valid at start)` 0.14; 1-row expansion 0.14; 2-row 0.14; deeper frontier counts (n3..n5) decay to zero and go *negative* (wide shallow fans die early). Sorting by the best combination recovers only 2.6% of the waste (1.521 → 1.481). Dead roots at N=20: none.
 3. **Utilization**: reload (10 warps/SM, 35 SASS/iter) ≈ 1.1 IPC/SM; capture kernel (32 warps/SM, 48 SASS/iter) ≈ 1.5 IPC/SM — i.e. 28–37% of the 4 IPC peak. Tripling resident warps buys only ~1.3x IPC.
 4. **Register-resident loop variants** (state in registers, smem touched only on push/pop): two-pass (pop as its own iteration) 3.3x slower (warp divergence serializes both paths); single-pass with conditional save + popc-based row recompute 1.6x slower. The compiler's scheduling of the simple unconditional-reload loop wins.
 5. **Deeper presets**: preset 7: 2358ms, preset 8: 2667ms (vs 2172ms at 6) — smaller subtrees have relatively larger variance, so the warp-tail waste grows.
-6. **Remaining candidate (~+20% ± 10%, untested)**: per-thread dynamic task fetching (atomic queue) combined with register-computed jkl constraints — the shared-memory jkl table assumes same-group workgroups and is the structural blocker for dynamic fetching. Would convert most of the 1.52 waste into a single last-round tail, at the cost of ~5–7 extra ALU ops per iteration.
+6. **Dynamic task fetching (coarse version refuted by #55; fine version implemented by #56)**: coarse tasks (one whole constellation) do not help - the 1.52 factor is independent of task size (K=1/4/8/16 measured 1978/1972/2141/2475ms). #56's fine-grained version (task = one slice of a constellation, with stack checkpointing) lets lanes truly slide at budget boundaries, and fixes the pool-shrink starvation (K=4-6 keep the pool deep).
 
 ## Approaches Not Yet Tried
 

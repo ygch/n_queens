@@ -43,149 +43,215 @@ struct Constellation4 {
 };
 
 // =============================================================================
-// GPU内核：D4星座 + Jeff Somers位并行回溯（回载式循环）
+// GPU内核：D4星座 + Jeff Somers位并行回溯（回载循环 + 可抢占细粒度调度）
 //
-// 与旧循环的区别：
-//   - 旧：每层只存 queen(4B)，回溯用"反向移位 + ld_mem/rd_mem 捕获位"重建
-//         ld/rd，并依赖 direction 防重掩码；每次迭代约 15-20 条 SASS。
-//   - 新：每层存完整状态 {cur,left,right,residual}（16B，int4 零 bank 冲突布局），
-//         迭代时重载父状态——不再需要捕获位与防重掩码。
+// 状态机（回载式）：
+//   每层存完整状态 {cur,left,right,residual}（16B，int4 零 bank 冲突布局），
+//   迭代时重载当前节点状态——不需要捕获位与防重掩码（对比 faf-cuda 捕获式）。
+//
+// 负载均衡（#56，2026-10-18）：
+//   warp 内所有 lane 共用指令流，warp 要等最慢的 lane（N=20 实测迭代数 max/mean=1.52）。
+//   这里把每个星座的 DFS 按 slice 次迭代切片：每轮每 lane 从块内任务队列领一个任务，
+//   跑满 slice 次迭代后把 {栈, 部分解数, top} 检查点写回全局内存并重新入队；
+//   未完成任务由任意 lane 继续（栈在 lane 私有 smem slab 中恢复）。
+//   于是每一轮各 lane 工作量等长，warp 不再被单个大子树拖住。
+//   任务池深度 = block_size*K（K 见 host；池会随任务完成缩小，K 太小后期 lane 会饿）。
 //
 // 计数与原内核逐子问题等价（Python 精确模拟对 1747 个真实子问题 0 误差验证）：
 //   popc(cur)==leaf_pc ⇔ 刚放完第 N-3 行，子行(N-2)的合法位置数即解数
 //   leaf_pc = popc(col) + (N - start - 2)；jkl 行号 = (start - popc(col)) + popc(cur)
 // =============================================================================
 template <int N>
-__global__ void __launch_bounds__(MAX_BLOCK, 12)
+__global__ void __launch_bounds__(MAX_BLOCK)
 n_queens_kernel(
-    const Constellation4 * __restrict__ constellations,  // 每线程一个星座
+    const Constellation4 * __restrict__ constellations,  // 本block的 K*blockDim 个星座
     const unsigned int * __restrict__ jkl_queens_arr,     // 每block的N个jkl约束
     int S,                                                // 栈深：host 按真实最大深度精确计算
-    long long * __restrict__ results)                     // 输出：每线程一个解数
+    long long * __restrict__ results,                     // 输出：每星座一个解数
+    int K,                                                // 每block的星座数 = K*blockDim
+    int slice,                                            // 每轮迭代预算（细粒度任务平衡）
+    int4 * __restrict__ ckpt,                             // [星座槽 * S] 栈检查点
+    int * __restrict__ ckpt_top,                          // 每任务已保存层数（0 = 未开始）
+    long long * __restrict__ ckpt_sol,                    // 每任务已累计解数
+    int * __restrict__ queue)                             // 每block：2*cap 环 + 3 计数器
 {
-    int gid = blockIdx.x * blockDim.x + threadIdx.x;
-    int lid = threadIdx.x;
-
-    // --- 1. 加载星座数据到寄存器 ---
-    Constellation4 c = constellations[gid];
+    const int lid = threadIdx.x;
+    const int nb = blockDim.x;
+    const int cap = nb * K;
+    const int myBase = blockIdx.x * cap;
     const unsigned int L = 1u << (N - 1);
-    unsigned int ld = (unsigned int)c.ld;    // 到 start 行对齐的对角线状态
-    unsigned int rd = (unsigned int)c.rd;
-    unsigned int col = ~(L - 2) ^ (unsigned int)c.col;
+    const unsigned int last = (1u << N) - 1;
 
-    // --- 2. 协作加载 jkl_queens 到共享内存 ---
+    // --- 协作加载 jkl_queens 到共享内存（整块共用一张表） ---
     __shared__ unsigned int jkl_queens[N];
     if (lid < N)
         jkl_queens[lid] = jkl_queens_arr[blockIdx.x * N + lid];
-    __syncthreads();
 
-    // --- 3. 处理伪星座 ---
-    int start = c.start_ijkl >> 20;
-    if (start == 69) {
-        results[gid] = 0;
-        return;
-    }
-
-    // --- 4. 修正边界皇后k和l的对角线（与旧内核一致） ---
-    int k_val = (c.start_ijkl >> 5) & 31;
-    int l_val = c.start_ijkl & 31;
-    if (k_val >= start)
-        ld &= ~(L >> (k_val - start));
-    if (l_val != N - 1 && l_val >= start)
-        rd &= ~(1u << (l_val - start));
-
-    // --- 5. 初始候选与短路 ---
-    const unsigned int last = (1u << N) - 1;
-    unsigned int valid = last & ~(ld | rd | col | jkl_queens[start]);
-    if (valid == 0) {          // 死根：原内核同样立即弹栈退出
-        results[gid] = 0;
-        return;
-    }
-    if (start >= N - 2) {      // 起始行即倒数第二行：合法位置数即解数
-        results[gid] = __popc(valid);
-        return;
-    }
-
-    // 回载式循环的换算常数（每子问题仅算一次）
-    const int init_pc = __popc(col);
-    const int leaf_pc = init_pc + (N - start - 2);
-    const int jrow_base = start - init_pc;
-
-    // --- 6. 共享内存栈：每线程 S 层 int4，零 bank 冲突布局 ---
-    // 同 warp 内 lane l 的层 e 位于槽 e*32+l；连续 lane 的 16B 向量铺满 32 bank
-    // S 由 host 按真实最大栈深精确给出（动态共享内存），避免按 N-3 过度分配压低占用率
+    // --- 共享内存栈：每线程 S 层 int4（lane l 的层 e 在 sbase + e*32） ---
     extern __shared__ int4 stk[];
     const int sbase = (lid >> 5) * (S * 32) + (lid & 31);
 
-    stk[sbase] = make_int4((int)col, (int)ld, (int)rd, (int)valid);
-    int top = 1;               // 层 e 位于槽 sbase + (e-1)*32
-    long long solutions = 0;
+    // --- 每 block 一个任务队列（全局内存）：[0, 2*cap) 环形缓冲 + qhead/qtail/qpop ---
+    int *q = queue + (size_t)blockIdx.x * (2 * cap + 4);
+    int *qhead = q + 2 * cap;
+    int *qtail = qhead + 1;
+    int *qpop  = qhead + 2;
 
-    // --- 7. 主回溯循环（手工 unroll×2：两份作用域化的循环体 + 中途退出） ---
-    while (top > 0) {
-        {
-        int4 e = stk[sbase + (top - 1) * 32];
-        unsigned int cur = (unsigned int)e.x;
-        unsigned int left = (unsigned int)e.y;
-        unsigned int right = (unsigned int)e.z;
-        unsigned int residual = (unsigned int)e.w;
+    if (lid == 0) { *qhead = 0; *qtail = 0; *qpop = 0; }
+    __syncthreads();
 
-        unsigned int p = residual & (0u - residual);   // 最低可用位
-        residual -= p;
-        stk[sbase + (top - 1) * 32].w = (int)residual; // 存回残余候选
-        if (residual == 0)
-            top--;                                     // 本层耗尽 → 弹栈
-
-        cur |= p;
-        left = (left | p) << 1;
-        right = (right | p) >> 1;
-
-        int pc = __popc(cur);
-        unsigned int child =
-            last & ~(cur | left | right | jkl_queens[jrow_base + pc]);
-
-        if (pc == leaf_pc || child == 0) {
-            // 叶子行(N-2)：child 的 popc 即解数；死胡同 child==0 加 0
-            solutions += __popc(child);
-        } else {
-            stk[sbase + top * 32] = make_int4((int)cur, (int)left, (int)right, (int)child);
-            top++;
-        }
-        }
-        if (top <= 0)
-            break;
-        {
-        int4 e = stk[sbase + (top - 1) * 32];
-        unsigned int cur = (unsigned int)e.x;
-        unsigned int left = (unsigned int)e.y;
-        unsigned int right = (unsigned int)e.z;
-        unsigned int residual = (unsigned int)e.w;
-
-        unsigned int p = residual & (0u - residual);   // 最低可用位
-        residual -= p;
-        stk[sbase + (top - 1) * 32].w = (int)residual; // 存回残余候选
-        if (residual == 0)
-            top--;                                     // 本层耗尽 → 弹栈
-
-        cur |= p;
-        left = (left | p) << 1;
-        right = (right | p) >> 1;
-
-        int pc = __popc(cur);
-        unsigned int child =
-            last & ~(cur | left | right | jkl_queens[jrow_base + pc]);
-
-        if (pc == leaf_pc || child == 0) {
-            // 叶子行(N-2)：child 的 popc 即解数；死胡同 child==0 加 0
-            solutions += __popc(child);
-        } else {
-            stk[sbase + top * 32] = make_int4((int)cur, (int)left, (int)right, (int)child);
-            top++;
-        }
-        }
+    // 初始任务池：伪星座直接写 0，真实星座入队
+    for (int i = lid; i < cap; i += nb) {
+        int gid = myBase + i;
+        if (constellations[gid].start_ijkl >> 20 == 69)
+            results[gid] = 0;
+        else
+            q[atomicAdd(qtail, 1)] = gid;
     }
 
-    results[gid] = solutions;
+    // --- 主循环：每轮领一个任务、跑 slice 次迭代；未完成则检查点后回队 ---
+    // lane 在任务边界被 warp 重新同步，但每轮工作量被预算截成等长 ⇒ warp 内不再等最慢子树
+    for (;;) {
+        __syncthreads();                       // (A) 上一轮的入队/账目可见
+        const int cnt = *qtail - *qhead;       // 本轮可领任务数（稳定）
+        if (cnt == 0)
+            break;                             // 池空 ⇒ 全体一起退出
+        const int take = atomicAdd(qpop, 1);
+        const int task = (take < cnt) ? q[(*qhead + take) % (2 * cap)] : -1;
+
+        bool finished = false;
+        if (task >= 0) {
+            const int gid = task;
+            Constellation4 c = constellations[gid];
+            const int start = c.start_ijkl >> 20;
+            unsigned int ld = (unsigned int)c.ld;
+            unsigned int rd = (unsigned int)c.rd;
+            unsigned int col = ~(L - 2) ^ (unsigned int)c.col;
+            const int k_val = (c.start_ijkl >> 5) & 31;
+            const int l_val = c.start_ijkl & 31;
+            if (k_val >= start)
+                ld &= ~(L >> (k_val - start));
+            if (l_val != N - 1 && l_val >= start)
+                rd &= ~(1u << (l_val - start));
+
+            int top = 0;
+            long long solutions = 0;
+            const int t = ckpt_top[gid];
+            if (t == 0) {
+                unsigned int valid = last & ~(ld | rd | col | jkl_queens[start]);
+                if (valid == 0) {              // 死根
+                    results[gid] = 0;
+                    finished = true;
+                } else if (start >= N - 2) {   // 起始行即倒数第二行
+                    results[gid] = __popc(valid);
+                    finished = true;
+                } else {
+                    stk[sbase] = make_int4((int)col, (int)ld, (int)rd, (int)valid);
+                    top = 1;
+                }
+            } else {                           // 恢复检查点
+                top = t;
+                solutions = ckpt_sol[gid];
+                for (int e = 0; e < top; e++)
+                    stk[sbase + e * 32] = ckpt[(size_t)gid * S + e];
+            }
+
+            if (!finished) {
+                const int init_pc = __popc(col);
+                const int leaf_pc = init_pc + (N - start - 2);
+                const int jrow_base = start - init_pc;
+                int budget = slice;
+
+                // --- 回溯循环（手工 unroll×2；预算到期即让出） ---
+                while (top > 0) {
+                    {
+                    int4 e = stk[sbase + (top - 1) * 32];
+                    unsigned int cur = (unsigned int)e.x;
+                    unsigned int left = (unsigned int)e.y;
+                    unsigned int right = (unsigned int)e.z;
+                    unsigned int residual = (unsigned int)e.w;
+
+                    unsigned int p = residual & (0u - residual);   // 最低可用位
+                    residual -= p;
+                    stk[sbase + (top - 1) * 32].w = (int)residual; // 存回残余候选
+                    if (residual == 0)
+                        top--;                                     // 本层耗尽 → 弹栈
+
+                    cur |= p;
+                    left = (left | p) << 1;
+                    right = (right | p) >> 1;
+
+                    int pc = __popc(cur);
+                    unsigned int child =
+                        last & ~(cur | left | right | jkl_queens[jrow_base + pc]);
+
+                    if (pc == leaf_pc || child == 0) {
+                        // 叶子行(N-2)：child 的 popc 即解数；死胡同 child==0 加 0
+                        solutions += __popc(child);
+                    } else {
+                        stk[sbase + top * 32] = make_int4((int)cur, (int)left, (int)right, (int)child);
+                        top++;
+                    }
+                    }
+                    if (top <= 0)
+                        break;
+                    {
+                    int4 e = stk[sbase + (top - 1) * 32];
+                    unsigned int cur = (unsigned int)e.x;
+                    unsigned int left = (unsigned int)e.y;
+                    unsigned int right = (unsigned int)e.z;
+                    unsigned int residual = (unsigned int)e.w;
+
+                    unsigned int p = residual & (0u - residual);   // 最低可用位
+                    residual -= p;
+                    stk[sbase + (top - 1) * 32].w = (int)residual; // 存回残余候选
+                    if (residual == 0)
+                        top--;                                     // 本层耗尽 → 弹栈
+
+                    cur |= p;
+                    left = (left | p) << 1;
+                    right = (right | p) >> 1;
+
+                    int pc = __popc(cur);
+                    unsigned int child =
+                        last & ~(cur | left | right | jkl_queens[jrow_base + pc]);
+
+                    if (pc == leaf_pc || child == 0) {
+                        // 叶子行(N-2)：child 的 popc 即解数；死胡同 child==0 加 0
+                        solutions += __popc(child);
+                    } else {
+                        stk[sbase + top * 32] = make_int4((int)cur, (int)left, (int)right, (int)child);
+                        top++;
+                    }
+                    }
+                    budget -= 2;
+                    if (budget <= 0)
+                        break;
+                }
+
+                finished = (top <= 0);
+                if (finished) {
+                    results[gid] = solutions;
+                } else {                           // 保存检查点
+                    for (int e = 0; e < top; e++)
+                        ckpt[(size_t)gid * S + e] = stk[sbase + e * 32];
+                    ckpt_sol[gid] = solutions;
+                    ckpt_top[gid] = top;
+                }
+            }
+        }
+
+        __syncthreads();                       // (B) 所有领取/时间片结束；qhead 更新互斥
+        if (task >= 0 && !finished) {
+            int pos = atomicAdd(qtail, 1);
+            q[pos % (2 * cap)] = task;         // 未完成任务回队
+        }
+        if (lid == 0) {
+            const int used = (*qpop < cnt) ? *qpop : cnt;
+            *qhead += used;
+            *qpop = 0;
+        }
+    }
 }
 
 // =============================================================================
@@ -230,7 +296,8 @@ static void padWithPseudo(std::vector<Constellation> &consts, int n, int blockSi
         cudaFuncSetAttribute(KERNEL<n_val>, \
             cudaFuncAttributePreferredSharedMemoryCarveout, \
             cudaSharedmemCarveoutMaxShared); \
-        KERNEL<n_val><<<num_blocks, block_size, SMEM>>>(d_const, d_jkl, maxd, d_results); \
+        KERNEL<n_val><<<num_blocks, block_size, SMEM>>>(d_const, d_jkl, maxd, d_results, K, \
+                                                       slice, d_ckpt, d_ctop, d_csol, d_queue); \
         break; \
     }
 
@@ -245,7 +312,7 @@ static void padWithPseudo(std::vector<Constellation> &consts, int n, int blockSi
 // block（编号 blk）归卡 blk % gpu_num；各卡把分到的 block 重排为连续段后，
 // 走与单卡相同的内核（段内 blockIdx 与重排后的 jkl 行一一对应）。
 // =============================================================================
-static long long solve_multi_gpu(int n, int gpu_num, int block_size, int num_blocks, int maxd,
+static long long solve_multi_gpu(int n, int gpu_num, int block_size, int K, int num_blocks, int maxd,
                                  const std::vector<Constellation4> &const_data,
                                  const std::vector<uint32_t> &jkl_queens_arr) {
     struct timeval t0, t1;
@@ -259,15 +326,15 @@ static long long solve_multi_gpu(int n, int gpu_num, int block_size, int num_blo
     std::vector<std::vector<uint32_t>> g_jkl(gpu_num);
     std::vector<std::vector<int>> g_w(gpu_num);   // symmetry 权重（伪星座记 0）
     for (int g = 0; g < gpu_num; g++) {
-        g_const[g].reserve((size_t)block_cnt[g] * block_size);
+        g_const[g].reserve((size_t)block_cnt[g] * block_size * K);
         g_jkl[g].reserve((size_t)block_cnt[g] * n);
-        g_w[g].reserve((size_t)block_cnt[g] * block_size);
+        g_w[g].reserve((size_t)block_cnt[g] * block_size * K);
     }
     for (int blk = 0; blk < num_blocks; blk++) {
         int g = blk % gpu_num;
-        const Constellation4 *src = const_data.data() + (size_t)blk * block_size;
-        g_const[g].insert(g_const[g].end(), src, src + block_size);
-        for (int j = 0; j < block_size; j++) {
+        const Constellation4 *src = const_data.data() + (size_t)blk * block_size * K;
+        g_const[g].insert(g_const[g].end(), src, src + (size_t)block_size * K);
+        for (int j = 0; j < block_size * K; j++) {
             int s = src[j].start_ijkl >> 20;
             g_w[g].push_back(s == 69 ? 0 : symmetry(n, src[j].start_ijkl & 0xFFFFF));
         }
@@ -297,6 +364,18 @@ static long long solve_multi_gpu(int n, int gpu_num, int block_size, int num_blo
         cudaMemcpy(d_jkl, g_jkl[g].data(), g_jkl[g].size() * sizeof(uint32_t), cudaMemcpyHostToDevice);
         cudaMemset(d_results, 0, my_cnt * sizeof(long long));
 
+        int slice = 8192;
+        { const char *e = getenv("NQ_SLICE"); if (e) slice = atoi(e); if (slice < 2) slice = 2; }
+        int4 *d_ckpt;
+        int *d_ctop;
+        long long *d_csol;
+        int *d_queue;
+        cudaMalloc(&d_ckpt, (size_t)my_cnt * maxd * sizeof(int4));
+        cudaMalloc(&d_ctop, (size_t)my_cnt * sizeof(int));
+        cudaMalloc(&d_csol, (size_t)my_cnt * sizeof(long long));
+        cudaMalloc(&d_queue, (size_t)num_blocks * (2 * block_size * K + 4) * sizeof(int));
+        cudaMemset(d_ctop, 0, (size_t)my_cnt * sizeof(int));
+
         size_t smem_reload = (size_t)(block_size / 32) * maxd * 32 * sizeof(int4);   // 宏内变量名对齐
         switch (n) {
             LAUNCH_N(6)  LAUNCH_N(7)  LAUNCH_N(8)  LAUNCH_N(9)  LAUNCH_N(10)
@@ -318,6 +397,10 @@ static long long solve_multi_gpu(int n, int gpu_num, int block_size, int num_blo
         cudaFree(d_const);
         cudaFree(d_jkl);
         cudaFree(d_results);
+        cudaFree(d_ckpt);
+        cudaFree(d_ctop);
+        cudaFree(d_csol);
+        cudaFree(d_queue);
         std::vector<Constellation4>().swap(g_const[g]);   // 及时释放主机内存
         std::vector<uint32_t>().swap(g_jkl[g]);
         print_with_time("gpu [%d] finish job.\n", g);
@@ -359,24 +442,35 @@ long long cuda_solve(int n, int preset_queens) {
         return 0;
     }
 
-    // Step 2: 按jkl排序、填充伪星座保证对齐
-    // 填充模数 384 = LCM(32,64,96,128)：任何按 N 选择的块大小都能整除组边界
-    padWithPseudo(constellations, n, 384);
-    long long cnt = constellations.size();
-
-    // 按 N 的块大小表（实测最优；默认 64）
+    // 按 N 的块大小表（队列版实测最优；默认 64）
     int block_size = 64;
     if (n == 20)
-        block_size = 128;        // N=20 实测 2195ms vs 64 的 2354ms
+        block_size = 128;        // N=20 实测 1428ms（b=32 1576ms、b=64 1614ms）
     else if (n == 21 || n >= 23)
-        block_size = 32;         // N=21 实测 16.72s vs 64 的 17.78s；N=23 实测 1352.4s
-                                // N=24~28：κ 模型预测 32 最优（未实测，跑 N=24 前先验证）
+        block_size = 32;         // N=21 实测 12.46s vs 64 的 12.81s
+                                // 例外 N=22（走默认 64）：实测 108.3s vs b=32 的 116.2s
+                                // N=24~28：κ 模型预测 32 最优（队列版未实测，跑 N=24 前先验证）
     {   // 实验开关：NQ_BLOCK 环境变量可覆盖按 N 表（便于扫描，不影响正常使用）
         const char *bs_env = getenv("NQ_BLOCK");
         if (bs_env)
             block_size = atoi(bs_env);
     }
-    int num_blocks = (int)(cnt / block_size);
+    // 每 block 的任务数 = block_size*K。抢占式调度下 K 决定任务池深度：
+    // 池随任务完成而缩小，K 越大池保持"满 lane"的时间越久（#56 实测 K=4~6 最优）。
+    int K = 6;
+    {
+        const char *k_env = getenv("NQ_K");
+        if (k_env)
+            K = atoi(k_env);
+        if (K < 1) K = 1;
+    }
+
+    // Step 2: 按jkl排序、填充伪星座保证对齐
+    // 对齐模数 = block_size*K：每个 block 处理 K*blockDim 个同 jkl 的星座
+    padWithPseudo(constellations, n, block_size * K);
+    long long cnt = constellations.size();
+
+    int num_blocks = (int)(cnt / ((long long)block_size * K));
 
     print_with_time("Total constellations (padded): %lld, blocks: %d\n", cnt, num_blocks);
 
@@ -387,7 +481,7 @@ long long cuda_solve(int n, int preset_queens) {
     std::vector<uint32_t> jkl_queens_arr(num_blocks * n, 0);
     for (int blk = 0; blk < num_blocks; blk++) {
         // 取block中第一个星座的ijkl（同组所有线程共享）
-        int ijkl = constellations[blk * block_size].start_ijkl & 0xFFFFF;
+        int ijkl = constellations[(long long)blk * block_size * K].start_ijkl & 0xFFFFF;
         int j = getj(ijkl), k = getk(ijkl), l = getl(ijkl);
 
         // 第一轮：计算j和k/l从棋盘底部向顶部延伸的对角线
@@ -435,7 +529,7 @@ long long cuda_solve(int n, int preset_queens) {
     int gpu_num = 0;
     cudaGetDeviceCount(&gpu_num);
     if (gpu_num > 1)
-        return solve_multi_gpu(n, gpu_num, block_size, num_blocks, maxd, const_data, jkl_queens_arr);
+        return solve_multi_gpu(n, gpu_num, block_size, K, num_blocks, maxd, const_data, jkl_queens_arr);
 
     // Step 5: 分配GPU内存并传输数据
     Constellation4 *d_const;
@@ -448,6 +542,27 @@ long long cuda_solve(int n, int preset_queens) {
     cudaMemcpy(d_const, const_data.data(), cnt * sizeof(Constellation4), cudaMemcpyHostToDevice);
     cudaMemcpy(d_jkl, jkl_queens_arr.data(), num_blocks * n * sizeof(unsigned int), cudaMemcpyHostToDevice);
     cudaMemset(d_results, 0, cnt * sizeof(long long));
+
+    // 细粒度任务平衡（#56）：每星座栈检查点 + 每 block 任务队列
+    int slice = 8192;
+    { const char *e = getenv("NQ_SLICE"); if (e) slice = atoi(e); if (slice < 2) slice = 2; }
+    int4 *d_ckpt;
+    int *d_ctop;
+    long long *d_csol;
+    int *d_queue;
+    cudaMalloc(&d_ckpt, (size_t)cnt * maxd * sizeof(int4));
+    cudaMalloc(&d_ctop, (size_t)cnt * sizeof(int));
+    cudaMalloc(&d_csol, (size_t)cnt * sizeof(long long));
+    cudaMalloc(&d_queue, (size_t)num_blocks * (2 * block_size * K + 4) * sizeof(int));
+    cudaMemset(d_ctop, 0, (size_t)cnt * sizeof(int));
+    print_with_time("checkpoint buffers: %.0f MB (slice=%d)\n",
+                    ((double)cnt * maxd * 16 + (double)cnt * 12) / 1048576.0, slice);
+    if (!d_ckpt || !d_ctop || !d_csol || !d_queue) {
+        print_with_time("checkpoint allocation failed (out of GPU memory)\n");
+        cudaFree(d_ckpt); cudaFree(d_ctop); cudaFree(d_csol); cudaFree(d_queue);
+        cudaFree(d_const); cudaFree(d_jkl); cudaFree(d_results);
+        return -1;
+    }
 
     // Step 6: 启动GPU内核
     gettimeofday(&t0, NULL);
@@ -474,10 +589,32 @@ long long cuda_solve(int n, int preset_queens) {
     std::vector<long long> results(cnt);
     cudaMemcpy(results.data(), d_results, cnt * sizeof(long long), cudaMemcpyDeviceToHost);
 
+    {   // 实验开关：导出每线程解数，用于分析 warp 内负载分布（不影响正常运行）
+        const char *dump = getenv("NQ_DUMP");
+        if (dump) {
+            FILE *f = fopen(dump, "wb");
+            if (f) { fwrite(results.data(), sizeof(long long), cnt, f); fclose(f); }
+            char gp[512];
+            snprintf(gp, sizeof(gp), "%s.ijkl", dump);
+            FILE *g = fopen(gp, "wb");
+            if (g) {
+                for (long long i = 0; i < cnt; i++) {
+                    int v = constellations[i].start_ijkl;
+                    fwrite(&v, sizeof(int), 1, g);
+                }
+                fclose(g);
+            }
+        }
+    }
+
 
     cudaFree(d_const);
     cudaFree(d_jkl);
     cudaFree(d_results);
+    cudaFree(d_ckpt);
+    cudaFree(d_ctop);
+    cudaFree(d_csol);
+    cudaFree(d_queue);
 
     // Step 8: 汇总——每个星座的解数乘以D4对称倍数
     // symmetry()返回8（一般情况）/4（180度对称）/2（90度对称）
