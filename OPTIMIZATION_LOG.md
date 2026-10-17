@@ -848,6 +848,22 @@ At N=22 r7 pays ~4.6s more host time than r6, while the extra resident warp save
 
 Implication: the crossover = ladder gain vs host tax; per +1 N the kernel grows x9-10 while host cost grows x1.4 -> from N=24 the host tax is <1% and the r6/r7 choice is decided by the ladder alone. The N=22 r6/r7 difference must NOT be read as "the kernel is 20% slower" - at that size the kernel difference is unresolvable (+-2-3s).
 
+## Attempt #53: correcting #52's wording with the measured N=22 kernel/host split (2026-10-17)
+
+New log (8-GPU box, block=64):
+
+| run | kernel (parallel region, incl. per-GPU gather/copies) | gen | rest (sort/const_data/jkl/sum) | calc |
+|---|---|---|---|---|
+| r6 | **21.086 s** | 0.123 s | 1.064 s | 22.273 s |
+| r7 | **21.274 s** (+0.9%) | 1.029 s | 4.876 s | 27.179 s |
+
+**Two wording corrections (from #52 / the previous chat answer)**:
+1. "r7's kernel is faster on the GPU (the +1 block saves ~2s)" - **false**. The measured kernels are essentially equal (21.09 vs 21.27s): r7's extra resident block is fully offset by its **per-subproblem fixed cost** (at N=22 trees are small and the subproblem count is x9.8, setup tax ~9%; the tax scales as 1/tree-size, i.e., /9 per +1 N - so at N=24 the measured kernel advantage r7 -7.9% = step ~10% - tax ~1%, self-consistent).
+2. Attribution corrected: the 4.91s calc gap = **host side 4.72s (96.2%)** (gen +0.91s; sort/const_data/jkl/sum +3.81s) + kernel +0.19s. Nearly the entire "r7 is slower at N=22" is host-pipeline tax.
+3. Rate check: r7 non-kernel = 5.905s / 29.0M = **0.204 s/M**, consistent with #52's 0.175 s/M estimate from N=24 (15% apart).
+
+Direction unchanged (the N=22 r6/r7 gap is host tax; N>=24 decided by the ladder); wording corrected per the measurement.
+
 ## Measured Optimization Space Map (2026-10)
 
 An instrumented campaign (per-thread iteration counters, warp-level analysis, occupancy queries, SASS dumps) bounded what remains after #12:
