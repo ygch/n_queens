@@ -1032,6 +1032,18 @@ Cause: the crossing copy loops plus the mode checks make the hot loop branch/BSS
 
 **Conclusion**: occupancy remains the most valuable lever (+20-30% potential), but it needs a **zero-check hot loop** (e.g. warp-uniform modes, or a scheduling-level scheme that leaves the loop untouched); the mixed-addressing/mode-switch design inside this single flat loop is refuted. The #59 build (4d1f129) is the final state; 8x5090 N=26 ~ 27.1h.
 
+## Attempt #61: register-carried state machine refuted (2026-10-18)
+
+**Motivation**: leaf-level iterations are over half of all iterations, and consecutive candidates of the same node ("stay") reload the unchanged state (LDS.128) and store the residual (STS.32) every trip. Keeping the current node state in registers, saving the parent only on descent and reloading it on pop, would cut ~2 LDS + 2 STS per iteration to about one memory op on average.
+
+**Design**: state in registers; on descent store the parent state into the parent slot (when the parent is exhausted, the child state overwrites the parent slot = collapse); on pop reload the new stack top; leaf stays touch no smem; the slice checkpoint first writes the register state into the top slot, then copies the stack.
+
+**Process**: the first version omitted the collapse (an exhausted parent's slot was not overwritten) -> popping back to a residual=0 parent with p=0 drifted the state and hung at N=8. With the collapse added, counts are exact at N=8/10/12/13/14.
+
+**Measured (N=20, interleaved A/B)**: **1913ms vs 1357ms (+41%)**. Same mechanism as before: conditional LDS/STS inside the hot loop make nvcc emit branches/reconvergence (#33/#55/#60), and the long-lived state registers hurt scheduling.
+
+**Conclusion**: on-demand loads / conditional memory access variants inside the single flat loop are all off the table; **unconditional accesses + reload** is the form the compiler schedules best. Reverted to the #59 commit (N=20/21 counts and times re-verified). The final build remains `4d1f129`; 8x5090 N=26 ~ 27.1h.
+
 ## Measured Optimization Space Map (2026-10)
 
 An instrumented campaign (per-thread iteration counters, warp-level analysis, occupancy queries, SASS dumps) bounded what remains after #12:
