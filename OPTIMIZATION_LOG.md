@@ -928,6 +928,76 @@ The N=20 oracle bound was 1358ms (#55), so the implementation is within 5% of it
 
 **Projection**: 8x5090 N=26 ~ 40h x 0.74 ~ **29.6h**, meeting the <=30h gate. Caveat: the multi-GPU path was updated (per-GPU checkpoint/queue arrays) but cannot be tested on this single-GPU box; run an N=24 preflight on 8 GPUs first.
 
+## Attempt #57: re-estimate N=20-28 on 8x4090 / 8x5090 with the #56 kernel (2026-10-18)
+
+**Method**
+1. Extracted each run's **GPU compute window** (8-GPU start->finish timestamps) and the host time (calc - window) from faf-cuda-reload-log/8x4090.log. The multi-GPU "CUDA kernel time" print includes per-GPU cudaMalloc/H2D/OMP startup (~1s at small N) and must not be used as the kernel time.
+2. New-kernel speedup f from the single-GPU A/B: N=20 (b=128) **0.737**, N=21 (b=32) **0.787**, N=22 (b=64) **0.742**; f = **0.77** for N>=23 (production b=32, K=6). New total = old total - old GPU window x (1-f) (checkpoint allocation delta negligible).
+3. N=26-28 unmeasured: anchored at N=25 and stepped by **solution ratio x ladder (blocks_prev/blocks_next)**; r6's N=25 anchor derived from its N=24 measurement, r7 uses its N=25 measurement. Residency ladder (warps/SM): r6 = 12,11,10,10,9,9,8,8,8; r7 = 12,12,11,10,10,9,9,8,8 (N=20->28).
+4. 8x5090 = GPU part x **0.775** (main-branch Excel 5090/4090 ratios 0.75-0.83); host unchanged.
+
+**Results (central estimates)**
+
+| N | r6 4090 | r7 4090 | r6 5090 | r7 5090 | pick |
+|---|---|---|---|---|---|
+| 20 | 2.08 s | 3.90 s | 2.02 s | 3.81 s | r6 |
+| 21 | 3.67 s | 6.99 s | 3.24 s | 6.58 s | r6 |
+| 22 | 17.0 s | 21.9 s | 13.7 s | 18.6 s | r6 |
+| 23 | 2.4 min | 2.5 min | 1.9 min | 2.0 min | r6 |
+| 24 | 24.0 min | 22.3 min | 18.6 min | 17.3 min | r7 |
+| 25 | 3.87 h | 3.93 h | 3.00 h | 3.05 h | r6 |
+| 26 | 44.0 h | **39.7 h** | 34.1 h | **30.8 h** | r7 |
+| 27 | 19.3 d | 19.6 d | 15.0 d | 15.2 d | r6 |
+| 28 | 210 d | 213 d | 163 d | 165 d | r7 (r6 is the 96KB knife-edge) |
+
+**Key points**
+- 8x5090 N=26 r7 drops from #51's 40.0h to **~30.8h** (f in [0.73,0.79] -> 29.2-31.6h), right at the 30h gate. A preflight block-size retune (b=64 shares the pool with the same resident warps at N=23/24/28) may add 3-6%.
+- For N<=21 the total is dominated by the host/per-GPU init floor (~1.7-1.8s); the new kernel only improves the total by 5-12% there. From N=22 GPU time dominates (-23%).
+- r6 vs r7 at N=27/28 is inside the model error; at N=28 pick r7 because r6's 8-block demand is exactly 98,304B.
+- Historical model error: r7's extra block at N=22 did not materialize (#53); the N=24 ladder step was ~80% effective; uncertainty ~±10% for N>=26.
+- Preconditions: the multi-GPU path is untested on hardware; an N=24 preflight (~20 min) is needed to confirm scaling and counts.
+
+## Attempt #58: N=23 close-out - old kernel measured 1352.4s, new kernel 1017.6s (-24.8%); b=64 refuted (2026-10-18)
+
+Corrects #57's extrapolation: the old-kernel N=23 was **measured at 1352.4s** (not the 1314s extrapolation).
+
+**New data**
+| N=23 r6 | time | note |
+|---|---|---|
+| old kernel (existing measurement) | 1352.4 s | baseline |
+| new kernel b=32 (default) | **1017.6 s** | **-24.8%**, f = 0.752 |
+| new kernel b=64 | 1195.5 s | +17.5%, count correct but slower |
+
+- f measurements: N=20 **0.737**, N=21 **0.787**, N=22 **0.742**, N=23 **0.752** (mean ~0.755); #57's 0.77 was slightly conservative.
+- **b=64 is 17.5% slower at N=23**: its per-block dynamic smem is 19,456B, and with the static jkl table and allocation granularity the resident block count drops (b=32 keeps 10 warps). "Same warps -> bigger block" does not hold; the table stays 23-28 -> 32. b=64 won at N=22 because the per-block smem there (9,216B) still allows 10 warps.
+- **Ladder warning**: the N=22->23 step is 9.71x (new), 9.27x (old), vs the pure solution ratio 9.005x. The new kernel loses 4.8% more than the old one on this step, so the N>=26 ladder extrapolations still carry ~±10% uncertainty.
+
+**Updated estimates with f=0.752**: 8x4090 N=23 ~ 182.4 x 0.752 + 2.3 ~ **139.5 s** (single-GPU cross-check 1017.6/7.20 ~ 141 s); 8x5090 N=23 ~ **1.8 min**; 8x5090 N=26 r7 ~ **30.1 h** (was 30.8h), N=27 r6 ~ 14.6 d, N=28 r7 ~ **162 d**.
+
+## Attempt #59: ALU/latency work toward the 25h target - another ~10-11% single-GPU (N=20/21/22 interleaved, 2026-10-18)
+
+Goal: another 17% on top of #56 (8x5090 N=26 30.1h -> 25h), benchmarked at N=21.
+
+**Diagnosis**: the hot loop was 34 instructions/iteration with ~14-17 ALU (half-rate) ops; at N=21 each warp-iteration takes ~154 cycles (30.5 instructions -> only ~55% issue utilisation, ~52% ALU-pipe busy) - **neither issue- nor ALU-saturated: it is LDS-dependency latency with too few warps**. Occupancy is smem-bound (11 warps), and the "one level less stack" A/B was neutral (12 blocks do not fit), so adding warps alone is not available; only fewer instructions / shorter chains.
+
+**Four changes (all counts verified, compute-sanitizer clean)**
+1. **True stack depth + guard slot**: the leaf level never pushes, so host maxd becomes `(N-2)-start` (the old +1 was conservative). Each warp keeps one extra "guard" level below its stack, written per task as `{col, last, last, 0}`: if the second unrolled half runs after a root pop it reads the guard - residual=0 (no push), left|right=last (child=0), pc=popc(col)=init_pc (jkl row = start, always in bounds). This **removes the mid-loop top check** (-1 ALU, -1 branch per iteration).
+2. **Right shift on the FMA pipe**: `(right|p)>>1` -> `__umulhi(right|p, 0x80000000u)` (IMAD.HI); the last SHF disappears from the loop.
+3. **Child in 2 LOP3**: inline `lop3.b32` forces `t=cur|left|right`, `child=last&~(t|jkl)`, avoiding the compiler's third LOP3 for the child!=0 test (the test folds into the LOP3 predicate output).
+4. **Merged loop condition**: `while (top>0 && budget>0)` with the budget decrement at the loop tail; one instruction fewer per pair.
+
+**Interleaved A/B (same thermal state, all counts exact)**
+
+| N | before | after | gain |
+|---|---|---|---|
+| 20 | 1506 ms | **1356 ms** | -10.0% |
+| 21 | 13193 ms | **11730 ms** | -11.1% |
+| 22 | 109186 ms | **102730 ms** | -5.9% (last two changes only; ~-10% vs the first build) |
+
+Hot loop 63 -> 61 SASS per pair (30.5/iteration). K=6, slice 8k-16k flat (keep 8192). Fixed the multi-GPU smem formula to `(maxd+1)` levels (otherwise the guard is out of bounds).
+
+**Status**: 8x5090 N=26 estimate 30.1h x ~0.90 ~ **27.1h**, still ~8% above the 25h target. The remaining bottleneck is smem-limited occupancy (LDS dependency chain at 11 warps). Next candidate: spill the rarely-visited shallow stack levels (near the root) to global memory and keep only the deep D levels in smem (the leaf level is the most visited) - this would cut the per-warp slab from 21 to ~12-14 levels (+30-50% warps) at the cost of one boundary check per iteration and a few global accesses. Structural change; needs its own verification.
+
 ## Measured Optimization Space Map (2026-10)
 
 An instrumented campaign (per-thread iteration counters, warp-level analysis, occupancy queries, SASS dumps) bounded what remains after #12:

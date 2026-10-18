@@ -81,6 +81,7 @@ n_queens_kernel(
     const int myBase = blockIdx.x * cap;
     const unsigned int L = 1u << (N - 1);
     const unsigned int last = (1u << N) - 1;
+    stk_guard_init:;
 
     // --- 协作加载 jkl_queens 到共享内存（整块共用一张表） ---
     __shared__ unsigned int jkl_queens[N];
@@ -89,7 +90,11 @@ n_queens_kernel(
 
     // --- 共享内存栈：每线程 S 层 int4（lane l 的层 e 在 sbase + e*32） ---
     extern __shared__ int4 stk[];
-    const int sbase = (lid >> 5) * (S * 32) + (lid & 31);
+    // 每 warp 的 smem 布局：[保护槽(1 层)] [栈 S 层]。
+    // 保护槽在每任务开始时写为 {col, last, last, 0}：根节点弹栈后若还有半轮循环会读到它，
+    // residual=0 不压栈、left|right=last ⇒ child=0；pc=popc(col)=init_pc ⇒ jkl 行号=start，恒合法。
+    // 这样热循环可以删掉中途 top 检查（省 1 ALU + 1 分支）。
+    const int sbase = (lid >> 5) * ((S + 1) * 32) + 32 + (lid & 31);
 
     // --- 每 block 一个任务队列（全局内存）：[0, 2*cap) 环形缓冲 + qhead/qtail/qpop ---
     int *q = queue + (size_t)blockIdx.x * (2 * cap + 4);
@@ -160,10 +165,11 @@ n_queens_kernel(
                 const int init_pc = __popc(col);
                 const int leaf_pc = init_pc + (N - start - 2);
                 const int jrow_base = start - init_pc;
+                stk[sbase - 32] = make_int4((int)col, (int)last, (int)last, 0);  // 保护槽
                 int budget = slice;
 
                 // --- 回溯循环（手工 unroll×2；预算到期即让出） ---
-                while (top > 0) {
+                while (top > 0 && budget > 0) {
                     {
                     int4 e = stk[sbase + (top - 1) * 32];
                     unsigned int cur = (unsigned int)e.x;
@@ -179,11 +185,13 @@ n_queens_kernel(
 
                     cur |= p;
                     left = (left | p) << 1;
-                    right = (right | p) >> 1;
+                    right = __umulhi(right | p, 0x80000000u);   // == (right|p)>>1，走 FMA 管
 
                     int pc = __popc(cur);
-                    unsigned int child =
-                        last & ~(cur | left | right | jkl_queens[jrow_base + pc]);
+                    const unsigned int jrow = jkl_queens[jrow_base + pc];
+                    unsigned int occ, child;
+                    asm("lop3.b32 %0, %1, %2, %3, 0xfe;" : "=r"(occ) : "r"(cur), "r"(left), "r"(right));
+                    asm("lop3.b32 %0, %1, %2, %3, 0x02;" : "=r"(child) : "r"(occ), "r"(jrow), "r"(last));
 
                     if (pc == leaf_pc || child == 0) {
                         // 叶子行(N-2)：child 的 popc 即解数；死胡同 child==0 加 0
@@ -193,8 +201,6 @@ n_queens_kernel(
                         top++;
                     }
                     }
-                    if (top <= 0)
-                        break;
                     {
                     int4 e = stk[sbase + (top - 1) * 32];
                     unsigned int cur = (unsigned int)e.x;
@@ -210,11 +216,13 @@ n_queens_kernel(
 
                     cur |= p;
                     left = (left | p) << 1;
-                    right = (right | p) >> 1;
+                    right = __umulhi(right | p, 0x80000000u);   // == (right|p)>>1，走 FMA 管
 
                     int pc = __popc(cur);
-                    unsigned int child =
-                        last & ~(cur | left | right | jkl_queens[jrow_base + pc]);
+                    const unsigned int jrow = jkl_queens[jrow_base + pc];
+                    unsigned int occ, child;
+                    asm("lop3.b32 %0, %1, %2, %3, 0xfe;" : "=r"(occ) : "r"(cur), "r"(left), "r"(right));
+                    asm("lop3.b32 %0, %1, %2, %3, 0x02;" : "=r"(child) : "r"(occ), "r"(jrow), "r"(last));
 
                     if (pc == leaf_pc || child == 0) {
                         // 叶子行(N-2)：child 的 popc 即解数；死胡同 child==0 加 0
@@ -225,8 +233,6 @@ n_queens_kernel(
                     }
                     }
                     budget -= 2;
-                    if (budget <= 0)
-                        break;
                 }
 
                 finished = (top <= 0);
@@ -376,7 +382,7 @@ static long long solve_multi_gpu(int n, int gpu_num, int block_size, int K, int 
         cudaMalloc(&d_queue, (size_t)num_blocks * (2 * block_size * K + 4) * sizeof(int));
         cudaMemset(d_ctop, 0, (size_t)my_cnt * sizeof(int));
 
-        size_t smem_reload = (size_t)(block_size / 32) * maxd * 32 * sizeof(int4);   // 宏内变量名对齐
+        size_t smem_reload = (size_t)(block_size / 32) * (maxd + 1) * 32 * sizeof(int4);   // 宏内变量名对齐（+1 保护槽）
         switch (n) {
             LAUNCH_N(6)  LAUNCH_N(7)  LAUNCH_N(8)  LAUNCH_N(9)  LAUNCH_N(10)
             LAUNCH_N(11) LAUNCH_N(12) LAUNCH_N(13) LAUNCH_N(14) LAUNCH_N(15)
@@ -506,17 +512,20 @@ long long cuda_solve(int n, int preset_queens) {
         jkl_queens_arr[blk * n + l] = ~1u;
     }
 
-    // Step 3.6: 回载内核的精确栈深（槽数 = (N-2)-start + 1；跳过伪星座与短路子问题）
+    // Step 3.6: 回载内核的精确栈深。
+    // 内核在 row==N-3 的叶子层只计数、不压栈，因此最大 top = (N-2)-start（不是 +1）。
+    // 槽数按此精确分配；每省 1 层 = 每 warp 少 512B smem（可能多一个驻留块）。
     int maxd = 1;   // 槽数
     for (long long i = 0; i < cnt; i++) {
         int s = constellations[i].start_ijkl >> 20;
         if (s == 69 || s >= n - 2)
             continue;
-        int d = (n - 2) - s + 1;
+        int d = (n - 2) - s;          // 叶子层不压栈，真实最大 top
         if (d > maxd)
             maxd = d;
     }
-    size_t smem_reload = (size_t)(block_size / 32) * maxd * 32 * sizeof(int4);   // 回载内核：int4 栈（精确深度）
+    // 每 warp 分配 maxd 层栈 + 1 个保护槽（放在栈下方，用于删除热循环的中途退出检查）
+    size_t smem_reload = (size_t)(block_size / 32) * (maxd + 1) * 32 * sizeof(int4);
 
     // Step 4: 转换为GPU端紧凑格式
     std::vector<Constellation4> const_data(cnt);
