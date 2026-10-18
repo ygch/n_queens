@@ -998,6 +998,40 @@ Hot loop 63 -> 61 SASS per pair (30.5/iteration). K=6, slice 8k-16k flat (keep 8
 
 **Status**: 8x5090 N=26 estimate 30.1h x ~0.90 ~ **27.1h**, still ~8% above the 25h target. The remaining bottleneck is smem-limited occupancy (LDS dependency chain at 11 warps). Next candidate: spill the rarely-visited shallow stack levels (near the root) to global memory and keep only the deep D levels in smem (the leaf level is the most visited) - this would cut the per-warp slab from 21 to ~12-14 levels (+30-50% warps) at the cost of one boundary check per iteration and a few global accesses. Structural change; needs its own verification.
 
+## Attempt #60: corrected real-occupancy ladder + shallow-stack spill refuted (2026-10-18)
+
+Still after 25h for 8x5090 N=26 (from ~27.1h). This round tested whether more warps are available and what they cost.
+
+**1. Real occupancy (cudaOccupancyMaxActiveBlocksPerMultiprocessor, N=21 b=32)**
+Each block carries ~**1KB fixed overhead** and each SM has ~**100KB usable** (not the old 96KB-without-overhead convention):
+`warps/SM = floor(100352 / (levels*512 + 1024))`, levels = N-4 (r6) / N-5 (r7, guard included).
+
+| N | r6 old | r6 real | r7 old | r7 real |
+|---|---|---|---|---|
+| 20 | 12 | **10** | 12 | **11** |
+| 21 | 11 | **10** | 12 | **10** |
+| 22 | 10 | **9** | 11 | **10** |
+| 23 | 10 | **9** | 10 | **9** |
+| 24 | 9 | **8** | 10 | **9** |
+| 25 | 9 | **8** | 9 | **8** |
+| 26 | 8 | **8** | 9 | **8** |
+| 27 | 8 | **7** | 8 | **8** |
+| 28 | 8 | **7** | 8 | **7** |
+
+Measured N=21 occupancy vs smem levels: 17->10 warps, 15->11, 14->12, 13->13, 12->14, 11->15, 10->16, 8->19, 6->24.
+**Impact on estimates**: the ladder shifts down by 1-2 warps, but the cumulative N=25->28 step is nearly unchanged (r7 1.125->1.143, r6 same ~1.14), so the #57 N=26-28 estimates (~27.1h / 162d) still hold within ~2%. The old table must be updated as above.
+
+**2. What one warp is worth** (measured by over-allocating smem to force lower occupancy; counts correct): at N=21, 10->9/8/7 warps = 11685/12616/13733/15290ms, i.e. **+8.0%/+17.5%/+30.8%** - more warps really help, with a steeper slope at lower occupancy.
+
+**3. Shallow-stack spill: implementation refuted.** Design: keep only the deep D levels in smem, spill the shallow S-D levels to the existing global checkpoint array, and use a per-lane mode base so hot-loop addressing stays a single add; B-level copies only at boundary crossings (plus guard/checkpoint/restore mode handling). Measured:
+- **B=0 (no spill, code merely present)**: N=20 2.97s vs the 1.35s baseline (**2.2x slower**);
+- spill=12 levels 5.25s, 10 levels 13.3s, 8 levels 19.0s (up to 14x slower).
+Cause: the crossing copy loops plus the mode checks make the hot loop branch/BSSY and raise register pressure; the occupancy gain (10->14 warps, ~+20-25% theoretical) cannot pay for it. Reverted (source restored to the #59 commit; counts re-verified).
+
+**4. Depth-class kernel split refuted**: the N=20 start distribution is 3/4/5 = 68.6%/23.4%/8.0% of constellations, but weighted by b^(N-2-start) the work is **86.6%/11.8%/1.6%** - the deep-stack class is the bulk, so splitting by depth buys nothing.
+
+**Conclusion**: occupancy remains the most valuable lever (+20-30% potential), but it needs a **zero-check hot loop** (e.g. warp-uniform modes, or a scheduling-level scheme that leaves the loop untouched); the mixed-addressing/mode-switch design inside this single flat loop is refuted. The #59 build (4d1f129) is the final state; 8x5090 N=26 ~ 27.1h.
+
 ## Measured Optimization Space Map (2026-10)
 
 An instrumented campaign (per-thread iteration counters, warp-level analysis, occupancy queries, SASS dumps) bounded what remains after #12:
