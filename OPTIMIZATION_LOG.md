@@ -1044,6 +1044,30 @@ Cause: the crossing copy loops plus the mode checks make the hot loop branch/BSS
 
 **Conclusion**: on-demand loads / conditional memory access variants inside the single flat loop are all off the table; **unconditional accesses + reload** is the form the compiler schedules best. Reverted to the #59 commit (N=20/21 counts and times re-verified). The final build remains `4d1f129`; 8x5090 N=26 ~ 27.1h.
 
+## Attempt #62: 10/19 re-test (8x4090 / 16 PPU) + r6/r7 decision and updated estimates (2026-10-19)
+
+**Data** (reload_8_4090.txt / reload_16_ppu.txt; per-card median durations; 8-card spread 1-7%):
+
+| N | r6 | r7 | r8 | r7 vs old kernel |
+|---|---|---|---|---|
+| 20 | 0.5 s | 0.3 s | - | -35% |
+| 21 | 3.0 s | 1.5 s | - | -32% |
+| 22 | 18.7 s | 12.2 s | 12.4 s | -39% |
+| 23 | 145.0 s | 115.5 s | 107.2 s | -36% |
+| 24 | 1398.8 s | 1092.6 s | - | -35% |
+| 25 | - | 11927.4 s | - | -35% |
+
+- r7's GPU window / old kernel = 0.61-0.68, matching the cumulative prediction **0.666** (#56's 0.74 x #59's 0.90); N=25 total **11,948 s** vs the predicted 12,251 s (-2.5%).
+- **The r6 regression is real and explainable** (not a measurement error; per-card spreads are normal): r6 has 8-10x fewer constellations with 8-10x larger tasks, which amplifies the queue's pool-drain tail (the last few big tasks run nearly serially); r7/r8 have small tasks and stay at a uniform -35%.
+- **r8**: kernel another ~7% faster (N=23 107.2 vs 115.5 s) but the host pipeline/memory explode (N=23 host 79 s, total 187.8 s; N=26 would be ~1.3B constellations ~ 42 GB host + ~21 GB GPU constant array) -> not viable.
+
+**Decisions**
+- **Preset: r6 for N=20/21 (host-bound), r7 for N>=22.** The old "switch to r7 at N=24 / use r6 at 25 and 27" is obsolete; r6 is 16% behind at N=22 and 20-22% behind at N=23/24.
+- New anchor (8x5090, f=0.775): **N=26 r7 ~ 26.0 h** (8x4090 33.5 h), N=27 r7 ~ 11.4 d (14.7 d), N=28 r7 ~ **142 d / 4.7 months** (183 d). Only ~4% above the 25 h target.
+- **Memory constraint**: N=26 checkpoint buffers ~ 150M x 21 x 16B / 8 ~ **6.3 GB per GPU** (8 cards OK); **single-GPU N>=26 needs ~50 GB, beyond a 24 GB card - single-GPU large N is infeasible**. Host-side constellation arrays at N=26 are ~5-7 GB.
+
+**"Not yet tried" re-review**: ILP with 2 constellations (no: two stacks halve the warps, each warp is worth 6-10%); global queue (no: needs register-computed jkl, block-level scheduling already balances, <=2% upside); preset (settled: r7 for N>=22); algorithmic (forward checking is already exact in the bitmask, no compact table for the last rows, all three leaf-batching implementations measured slower) -> low expected value.
+
 ## Measured Optimization Space Map (2026-10)
 
 An instrumented campaign (per-thread iteration counters, warp-level analysis, occupancy queries, SASS dumps) bounded what remains after #12:
@@ -1055,12 +1079,9 @@ An instrumented campaign (per-thread iteration counters, warp-level analysis, oc
 5. **Deeper presets**: preset 7: 2358ms, preset 8: 2667ms (vs 2172ms at 6) — smaller subtrees have relatively larger variance, so the warp-tail waste grows.
 6. **Dynamic task fetching (coarse version refuted by #55; fine version implemented by #56)**: coarse tasks (one whole constellation) do not help - the 1.52 factor is independent of task size (K=1/4/8/16 measured 1978/1972/2141/2475ms). #56's fine-grained version (task = one slice of a constellation, with stack checkpointing) lets lanes truly slide at budget boundaries, and fixes the pool-shrink starvation (K=4-6 keep the pool deep).
 
-## Approaches Not Yet Tried
+## Approaches Not Yet Tried (reviewed 2026-10-19, #62)
 
-1. **ILP with 2 constellations per thread**: Each thread processes 2 independent backtracking searches, interleaving instructions. Likely neutral: chains per SM are set by smem, not by threads (see space map item 3).
-
-2. **Persistent threads with global work queue**: Refined into "dynamic fetch + register-computed jkl" (space map item 6). The original plain dynamic fetch is blocked by the smem jkl table; V4 branch tested a similar scheme with per-row computed constraints (its jq block) at comparable per-subproblem cost.
-
-3. **Different preset_queens for CUDA**: Now tested 4–8 on the CUDA kernels (incl. the reload kernel); 6 remains optimal, 7/8 clearly slower (space map item 5).
-
-4. **Algorithmic changes**: Forward checking, constraint propagation, or bit-parallel pattern matching could reduce the search tree size. Would require significant rewriting; the space map suggests tree-size reduction is where the next >1.5x could come from.
+1. **ILP with 2 constellations per thread**: not worth it - two independent searches need two stacks (2x smem per lane), halving resident warps; each warp is worth 6-10% (#60), so the ILP gain cannot compensate.
+2. **Persistent threads with a global work queue**: not worth it - giving up the per-block jkl table requires register-computed constraints (+5-7 ALU/iteration on a latency/ALU-sensitive loop); block-level scheduling already balances SMs and the per-card spread is 1-7%.
+3. **Different preset_queens**: settled by #62 - r6 for N=20/21 (host-bound) and r7 for N>=22 (r7 is 16-35% faster at N=22-25 because smaller tasks shorten the queue's drain tail). r8's kernel is ~7% faster but its host/memory explode.
+4. **Algorithmic changes**: low expected value - the bitmask DFS already applies exact forward checking; table-driven last-row counting has no compact index; all three leaf-batching implementations (inline two rows, two candidates per trip, register-carried state) measured 33-48% slower due to SIMT divergence / conditional memory access.
