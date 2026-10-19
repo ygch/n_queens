@@ -1084,6 +1084,26 @@ Goal: 8x5090 N=26 from ~26.0h to 24h. Only scheduling was changed (hot loop unto
 - So the **24h target is at the edge of the error bar** and hinges on the real 5090 ratio - it must be measured with an 8x5090 N=24 r7 preflight using the new defaults (expect 8x4090 1128s x ~0.75 ~ 14 min).
 - If ~1-2% is still missing after the preflight, the only remaining option is task splitting during the pool drain (extra checkpoint slots + a task->original-gid map; ~+1.5-2%, sizable change).
 
+## Attempt #64: leaf-row jkl preload - refuted (2026-10-19)
+
+**Motivation**: at `pc==leaf_pc` the jkl row is fixed, so it can be preloaded per task; the leaf level is the largest iteration population, so this could remove the jkl LDS dependency latency there. Implementation: preload `jrow_leaf = jkl[jrow_base+leaf_pc]`, then in the loop `at_leaf = (pc==leaf_pc)`, `jrow = at_leaf ? jrow_leaf : jkl[...]`, reusing `at_leaf` for the leaf test.
+
+**Result**: counts exact (N=8/10/12/13/14), but the N=20 interleaved A/B gives **1388ms vs 1289ms (+8%)**. nvcc still adds select/scheduling overhead for the conditional LDS, cancelling the latency saving.
+
+**Conclusion**: same mechanism as #55/#60/#61 - any conditional memory access inside the hot loop is off the table. Reverted (source stays at 9c0970b). The single-GPU kernel is at its plateau: the only measurable losses left are the queue drain tail (~1.5% at K=16) and the multi-GPU per-card imbalance (~1.7% at N=25), both scheduling-level rewrites (task splitting / weighted card split) worth ~1.5% each.
+
+## Attempt #65: N=25 r6 filled in (8x4090 = 13,332s) + guard-removal variant refuted (2026-10-19)
+
+**1. N=25 r6 (the last missing cell)**
+- 8x4090 N=25 r6 = **13,332 s** (3.70h), count exact.
+- Same box N=25 r7 = 11,948 s (K=6/8192; the new K=16/16384 default is another ~4% faster) -> **r6 is 11.6% slower**.
+- Conclusion: N=25 also uses **r7** (consistent with #62's mechanism: r6's 8-10x larger tasks amplify the queue tail; the old "r6 at N=25" pick is obsolete). r6 remains only for N=20/21 (host-bound).
+
+**2. Guard-removal variant (aimed at the 5090's 128KB) - refuted**
+- Motivation: at N=26 r7 the stack is 20 levels + 1 guard level = 21; on the 5090's 128KB/SM this gives 10 warps, while 20 levels (no guard + mid-loop check) would give 11 (+10%).
+- Reproduced the same trade-off on the 4090 at N=22 r6 (model: 9 vs 10 warps), same-conditions A/B: **no-guard 101,890 ms vs guard 97,645 ms (+4.3%)**, counts exact.
+- The mid-loop `top>0` check costs more than the modeled warp gain, and the 4090 measurement suggests that warp delta may not materialize. **Keep the guard** (source stays at 9c0970b); do not switch on the 5090 unless the preflight shows a real one-warp drop.
+
 ## Measured Optimization Space Map (2026-10)
 
 An instrumented campaign (per-thread iteration counters, warp-level analysis, occupancy queries, SASS dumps) bounded what remains after #12:
