@@ -1068,6 +1068,22 @@ Cause: the crossing copy loops plus the mode checks make the hot loop branch/BSS
 
 **"Not yet tried" re-review**: ILP with 2 constellations (no: two stacks halve the warps, each warp is worth 6-10%); global queue (no: needs register-computed jkl, block-level scheduling already balances, <=2% upside); preset (settled: r7 for N>=22); algorithmic (forward checking is already exact in the bitmask, no compact table for the last rows, all three leaf-batching implementations measured slower) -> low expected value.
 
+## Attempt #63: scheduling-level tuning (r7: K=16 + slice=16384) - N=22 r7 -3.9% (2026-10-19)
+
+Goal: 8x5090 N=26 from ~26.0h to 24h. Only scheduling was changed (hot loop untouched).
+
+**Sweeps (single GPU, N=22 r7; equal warps; all counts exact)**
+- K: 4->98.5s, 6->95.8s, 8->95.1s, 12->94.4s, **16->93.4s**, 24->93.8s, 32->93.9s.
+- At K=16: b=64 93.2s (~= b=32 93.4s); slice 4096->94.2, 8192->93.4, **16384->93.0**, 32768->92.8, 65536->93.6s.
+- Mechanism: r7 tasks are 8-10x smaller than r6, so a deeper pool shortens the queue's pool-drain tail; beyond K~16 the larger alignment/block-count effects win.
+- **New defaults: K=16 for preset>=7, K=6 for r6; slice=16384** (NQ_K/NQ_SLICE still override).
+- Measured with the new defaults: N=22 r7 **92.06s (vs 95.8s at K=6/8192, -3.9%)**; N=20 r6 1307ms, N=21 r6 11110ms (counts exact, slightly faster too).
+
+**Impact on 8x5090 N=26**
+- 26.0h x 0.96 ~ **25.0h** (at the 5090/4090 ratio 0.775); if the large-N kernel ratio is close to the Excel's N=23 value **0.754**, then ~**24.4h**; 0.74 -> 23.9h.
+- So the **24h target is at the edge of the error bar** and hinges on the real 5090 ratio - it must be measured with an 8x5090 N=24 r7 preflight using the new defaults (expect 8x4090 1128s x ~0.75 ~ 14 min).
+- If ~1-2% is still missing after the preflight, the only remaining option is task splitting during the pool drain (extra checkpoint slots + a task->original-gid map; ~+1.5-2%, sizable change).
+
 ## Measured Optimization Space Map (2026-10)
 
 An instrumented campaign (per-thread iteration counters, warp-level analysis, occupancy queries, SASS dumps) bounded what remains after #12:

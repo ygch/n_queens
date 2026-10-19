@@ -370,7 +370,7 @@ static long long solve_multi_gpu(int n, int gpu_num, int block_size, int K, int 
         cudaMemcpy(d_jkl, g_jkl[g].data(), g_jkl[g].size() * sizeof(uint32_t), cudaMemcpyHostToDevice);
         cudaMemset(d_results, 0, my_cnt * sizeof(long long));
 
-        int slice = 8192;
+        int slice = 16384;
         { const char *e = getenv("NQ_SLICE"); if (e) slice = atoi(e); if (slice < 2) slice = 2; }
         int4 *d_ckpt;
         int *d_ctop;
@@ -463,7 +463,9 @@ long long cuda_solve(int n, int preset_queens) {
     }
     // 每 block 的任务数 = block_size*K。抢占式调度下 K 决定任务池深度：
     // 池随任务完成而缩小，K 越大池保持"满 lane"的时间越久（#56 实测 K=4~6 最优）。
-    int K = 6;
+    // K（每 block 的任务数 = block_size*K）。r7 的任务比 r6 小 8–10×，
+    // 池深取 16 可缩短队列抽干时的尾部（N=22 r7 实测 −2.5%）；r6 仍取 6。
+    int K = (preset_queens >= 7) ? 16 : 6;
     {
         const char *k_env = getenv("NQ_K");
         if (k_env)
@@ -553,7 +555,7 @@ long long cuda_solve(int n, int preset_queens) {
     cudaMemset(d_results, 0, cnt * sizeof(long long));
 
     // 细粒度任务平衡（#56）：每星座栈检查点 + 每 block 任务队列
-    int slice = 8192;
+    int slice = 16384;
     { const char *e = getenv("NQ_SLICE"); if (e) slice = atoi(e); if (slice < 2) slice = 2; }
     int4 *d_ckpt;
     int *d_ctop;
