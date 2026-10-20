@@ -1104,6 +1104,40 @@ Goal: 8x5090 N=26 from ~26.0h to 24h. Only scheduling was changed (hot loop unto
 - Reproduced the same trade-off on the 4090 at N=22 r6 (model: 9 vs 10 warps), same-conditions A/B: **no-guard 101,890 ms vs guard 97,645 ms (+4.3%)**, counts exact.
 - The mid-loop `top>0` check costs more than the modeled warp gain, and the 4090 measurement suggests that warp delta may not materialize. **Keep the guard** (source stays at 9c0970b); do not switch on the 5090 unless the preflight shows a real one-warp drop.
 
+## Attempt #66: 5090 hardware measured + occupancy table corrected + occupancy-driven block table (2026-10-20)
+
+**1. 5090 hardware (device query)**
+- `sharedMemPerMultiprocessor = 102,400 (100KB)`, `sharedMemPerBlockOptin = 101,376 (99KB)`, `SMs = 170`, `cc = 12.0`, idle clocks 2.83-2.90GHz.
+- The "128KB" in NVIDIA's docs is the total L1/shared capacity; the usable shared memory is still **100KB/SM** - the earlier "10-11 warps, 19-21h" model built on 128KB is void; the paper's 99KB was correct.
+- Measured 8x5090 / 8x4090 time ratio at equal configs = **0.785-0.845** (r7 ~0.79-0.81, r6 ~0.83-0.85), fully explained by 170/128 SMs x ~0.95 clock; no extra occupancy dividend.
+
+**2. Occupancy table (calibrated)**
+~1KB fixed per-block overhead, ~101,376B usable: `warps/SM = floor(101376 / (wpb*levels*512 + 1024)) * wpb`, levels = N-4 (r6) / N-5 (r7, guard included). Best block size (b32/b64/b128):
+
+| N | r6 | r7 |
+|---|---|---|
+| 20 | 128 (12 warps) | 64/128 (12) |
+| 21 | 32/64 (10) | 128 (12) |
+| 22 | **64 (10)** | 32/64 (10) |
+| 23 | **32 (9)** | **64 (10)** |
+| 24 | **32 (9)** | **32 (9)** |
+| 25 | 32 (8) | **32 (9)** |
+| 26 | 32 (8) | 32/64 (8) |
+| 27 | 64/128 (8) | 32/64 (8) |
+| 28 | **128 (8)** | **64 (8)** |
+
+**3. Measured validation**: 8x5090 N=23 r7, same K=16/slice=16384: b=32 window 96.6s -> **b=64 89.8s (-7.0%)**, count exact (blocks 43,982 = 1024-aligned). Predicted 9->10 warps; direction and magnitude match.
+
+**4. Applied** (`src/n_queens_cuda.cu`)
+- `n==23 && preset>=7 -> block=64` (r6 stays 32);
+- `n==28 -> r7: 64 (7->8 warps, +14%), r6: 128 (b=64 gives r6 only 6 warps)`;
+- N=26/27 stay at b=32 (b=64 also 8 warps, no gain); "drop the guard at N=26 for 9 warps" is rejected based on the N=22 r6 A/B (+4.3% slower).
+
+**5. Revised campaign estimates (8x5090, measured anchor N=25 r7 = 9389s)**
+- N=26 r7 ~ **26.4-29.7h** (N=25 has 9 warps, N=26 has 8; whether the 9->8 step materializes awaits the N=26 run);
+- N=27 r7 ~ 12-13.6d; N=28 r7 (b=64) ~ **126-142d**.
+- Cost at $100/day: N=26 ~$110-125, N=27 ~$1.2-1.4k, N=28 ~$12.6-14.2k -> still over the $10k budget; no further software headroom, the cost side needs chunked execution + spot instances or a lower $/work machine.
+
 ## Measured Optimization Space Map (2026-10)
 
 An instrumented campaign (per-thread iteration counters, warp-level analysis, occupancy queries, SASS dumps) bounded what remains after #12:

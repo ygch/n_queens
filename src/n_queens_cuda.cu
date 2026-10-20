@@ -455,7 +455,16 @@ long long cuda_solve(int n, int preset_queens) {
     else if (n == 21 || n >= 23)
         block_size = 32;         // N=21 实测 12.46s vs 64 的 12.81s
                                 // 例外 N=22（走默认 64）：实测 108.3s vs b=32 的 116.2s
-                                // N=24~28：κ 模型预测 32 最优（队列版未实测，跑 N=24 前先验证）
+    // N=23：r7（18 层）b=32 只有 9 块/SM；b=64（2 warps/块）→ 10 块 = 10 warps。
+    // 实测（8×5090，K=16/16384）：窗口 96.6s → 89.8s（−7.0%），计数正确。r6 仍是 b=32 最优。
+    if (n == 23 && preset_queens >= 7)
+        block_size = 64;
+
+    // N=28（栈 23/24 层）：b=32 只能驻留 7 块/SM。按可用 smem≈99KB：
+    //   r7（23 层）：b=64 → 4 块 × 2 = 8 warps（+14%）
+    //   r6（24 层）：b=64 → 仅 3 块 = 6 warps（更差！），b=128 → 2 块 × 4 = 8 warps
+    if (n == 28)
+        block_size = (preset_queens >= 7) ? 64 : 128;
     {   // 实验开关：NQ_BLOCK 环境变量可覆盖按 N 表（便于扫描，不影响正常使用）
         const char *bs_env = getenv("NQ_BLOCK");
         if (bs_env)
