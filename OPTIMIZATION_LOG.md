@@ -1155,3 +1155,29 @@ An instrumented campaign (per-thread iteration counters, warp-level analysis, oc
 2. **Persistent threads with a global work queue**: not worth it - giving up the per-block jkl table requires register-computed constraints (+5-7 ALU/iteration on a latency/ALU-sensitive loop); block-level scheduling already balances SMs and the per-card spread is 1-7%.
 3. **Different preset_queens**: settled by #62 - r6 for N=20/21 (host-bound) and r7 for N>=22 (r7 is 16-35% faster at N=22-25 because smaller tasks shorten the queue's drain tail). r8's kernel is ~7% faster but its host/memory explode.
 4. **Algorithmic changes**: low expected value - the bitmask DFS already applies exact forward checking; table-driven last-row counting has no compact index; all three leaf-batching implementations (inline two rows, two candidates per trip, register-carried state) measured 33-48% slower due to SIMT divergence / conditional memory access.
+
+## Attempt #67: ncu profiling + POPC hoist off the critical chain + 3-warp block occupancy (2026-10-20)
+
+**1. Nsight Compute profile (N=20, b=128, 12 warps/SM, root-enabled)**
+- Schedulers: active warps/scheduler 2.97, **eligible 0.56**, issued 0.45/cycle -> 55% of cycles issue nothing.
+- Stall mix per issued instruction: **short_scoreboard 2.50** (smem latency), **wait 1.88** (fixed-latency ALU deps, 28%), not_selected 0.31, math_pipe_throttle 0.23, barrier 0.22, dispatch 0.12, branch 0.05.
+- Shared-memory store bank conflicts = **74.2e9** (the 4B residual write-back at 16B lane stride is 4-way conflicted: the .w word always lands on banks 4*l+3). Load conflicts negligible.
+- Conclusion: latency-bound on the LDS(state)->POPC->LDS(jkl)->child->top' chain with too few eligible warps. MIO bandwidth has headroom (Mem Busy 77%, Mem Pipes 48%).
+
+**2. SoA stack layout (fix the 4-way store conflict) - REFUTED**
+- Rearranged each 512B level as [32x4B residual][32x12B cur/left/right] (bank = 3*lane, coprime with 32 -> conflict-free), same smem.
+- Result: N=20 1558ms vs 1239ms (**+26% slower**): +3 loads/+3 stores per push cost far more than the conflict replays they removed. Reverted.
+
+**3. Occupancy: amortize the 1KB/block overhead over 3 warps - KEPT**
+- The #66 ladder assumed 1-warp blocks. With b=96 (3 warps/block) the per-block overhead is shared:
+  - N=25 r7: b=96 -> 3 blocks x 3 = **9 warps/SM** (b=32 = 8), cudaOccupancy-verified.
+  - N=26 r7: the 32,256B dynamic smem was emulated at N=25 with a pad -> 3 blocks, 9 warps. (N=26 does not fit locally: ~50GB checkpoints.)
+- Coupling cost: N=22 proxy, 9 warps: 3-warp blocks 104.6s (repeat 104.6s, K=32 104.7s) vs 8 independent warps 108.4s (**-3.5%**) vs 9 independent warps 99.0s (ideal, so the coupling costs 5.6%). Task size grows with N, so N=25/26 should couple less.
+- Applied: `n in {25,26} and preset>=7 -> block_size=96`; N=27/28 cannot reach 9 warps with any block size.
+
+**4. POPC hoist off the p dependency chain - KEPT (production)**
+- Identity: `popc(cur|p) = popc(cur)+1` because p is always a new bit. Compute `pc0=popc(cur0)` immediately after the state load, use `jrow_base1+pc0` (base+1) and `leaf_pc1` (leaf-1).
+- This removes ~3 ALU latencies (p: NEG+AND, cur|=p) from the jkl address chain; SASS confirms the POPC now immediately follows LDS.128 and the jkl LDS issues in parallel with the p chain.
+- Measured (counts exact): N=20 r7 1249->1201ms (**-3.6%**), N=21 r7 10.75->10.40s (**-3.3%**), N=22 r7 93.6->89.2s (**-4.7%**).
+
+**5. Also refuted this round**: 32-bit per-slice leaf accumulator (48->56 regs, -0.5%), k/l row skipping with per-depth level tables (nodes -9% exact, but the data-dependent row shift costs the same), row-order permutations (natural is optimal for N>=14), local-memory stack (25x slower), register-carry + speculative prefetch (+56%).

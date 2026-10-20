@@ -163,8 +163,10 @@ n_queens_kernel(
 
             if (!finished) {
                 const int init_pc = __popc(col);
-                const int leaf_pc = init_pc + (N - start - 2);
-                const int jrow_base = start - init_pc;
+                // pc = popc(cur|p) = popc(cur)+1（p 必为 cur 的新位）→ POPC 可脱离 p 的依赖链，
+                // jkl 的地址因此提前 ~3 个 ALU 延迟算出，缩短循环携带链。
+                const int leaf_pc1 = init_pc + (N - start - 3);   // 判定用 popc(cur)（放置前）
+                const int jrow_base1 = start - init_pc + 1;
                 stk[sbase - 32] = make_int4((int)col, (int)last, (int)last, 0);  // 保护槽
                 int budget = slice;
 
@@ -172,10 +174,11 @@ n_queens_kernel(
                 while (top > 0 && budget > 0) {
                     {
                     int4 e = stk[sbase + (top - 1) * 32];
-                    unsigned int cur = (unsigned int)e.x;
+                    unsigned int cur0 = (unsigned int)e.x;
                     unsigned int left = (unsigned int)e.y;
                     unsigned int right = (unsigned int)e.z;
                     unsigned int residual = (unsigned int)e.w;
+                    int pc0 = __popc(cur0);                        // 与 p 无关，可立即发射
 
                     unsigned int p = residual & (0u - residual);   // 最低可用位
                     residual -= p;
@@ -183,17 +186,16 @@ n_queens_kernel(
                     if (residual == 0)
                         top--;                                     // 本层耗尽 → 弹栈
 
-                    cur |= p;
+                    unsigned int cur = cur0 | p;
                     left = (left | p) << 1;
                     right = __umulhi(right | p, 0x80000000u);   // == (right|p)>>1，走 FMA 管
 
-                    int pc = __popc(cur);
-                    const unsigned int jrow = jkl_queens[jrow_base + pc];
+                    const unsigned int jrow = jkl_queens[jrow_base1 + pc0];
                     unsigned int occ, child;
                     asm("lop3.b32 %0, %1, %2, %3, 0xfe;" : "=r"(occ) : "r"(cur), "r"(left), "r"(right));
                     asm("lop3.b32 %0, %1, %2, %3, 0x02;" : "=r"(child) : "r"(occ), "r"(jrow), "r"(last));
 
-                    if (pc == leaf_pc || child == 0) {
+                    if (pc0 == leaf_pc1 || child == 0) {
                         // 叶子行(N-2)：child 的 popc 即解数；死胡同 child==0 加 0
                         solutions += __popc(child);
                     } else {
@@ -203,10 +205,11 @@ n_queens_kernel(
                     }
                     {
                     int4 e = stk[sbase + (top - 1) * 32];
-                    unsigned int cur = (unsigned int)e.x;
+                    unsigned int cur0 = (unsigned int)e.x;
                     unsigned int left = (unsigned int)e.y;
                     unsigned int right = (unsigned int)e.z;
                     unsigned int residual = (unsigned int)e.w;
+                    int pc0 = __popc(cur0);                        // 与 p 无关，可立即发射
 
                     unsigned int p = residual & (0u - residual);   // 最低可用位
                     residual -= p;
@@ -214,17 +217,16 @@ n_queens_kernel(
                     if (residual == 0)
                         top--;                                     // 本层耗尽 → 弹栈
 
-                    cur |= p;
+                    unsigned int cur = cur0 | p;
                     left = (left | p) << 1;
                     right = __umulhi(right | p, 0x80000000u);   // == (right|p)>>1，走 FMA 管
 
-                    int pc = __popc(cur);
-                    const unsigned int jrow = jkl_queens[jrow_base + pc];
+                    const unsigned int jrow = jkl_queens[jrow_base1 + pc0];
                     unsigned int occ, child;
                     asm("lop3.b32 %0, %1, %2, %3, 0xfe;" : "=r"(occ) : "r"(cur), "r"(left), "r"(right));
                     asm("lop3.b32 %0, %1, %2, %3, 0x02;" : "=r"(child) : "r"(occ), "r"(jrow), "r"(last));
 
-                    if (pc == leaf_pc || child == 0) {
+                    if (pc0 == leaf_pc1 || child == 0) {
                         // 叶子行(N-2)：child 的 popc 即解数；死胡同 child==0 加 0
                         solutions += __popc(child);
                     } else {
@@ -302,6 +304,12 @@ static void padWithPseudo(std::vector<Constellation> &consts, int n, int blockSi
         cudaFuncSetAttribute(KERNEL<n_val>, \
             cudaFuncAttributePreferredSharedMemoryCarveout, \
             cudaSharedmemCarveoutMaxShared); \
+        if (getenv("NQ_OCC")) { \
+            int occ_ = 0; \
+            cudaOccupancyMaxActiveBlocksPerMultiprocessor(&occ_, KERNEL<n_val>, block_size, (size_t)(SMEM)); \
+            fprintf(stderr, "[occ] n=%d block=%d smem=%zu -> blocks/SM=%d warps/SM=%d\n", \
+                    n_val, (int)block_size, (size_t)(SMEM), occ_, occ_ * (int)block_size / 32); \
+        } \
         KERNEL<n_val><<<num_blocks, block_size, SMEM>>>(d_const, d_jkl, maxd, d_results, K, \
                                                        slice, d_ckpt, d_ctop, d_csol, d_queue); \
         break; \
@@ -382,7 +390,8 @@ static long long solve_multi_gpu(int n, int gpu_num, int block_size, int K, int 
         cudaMalloc(&d_queue, (size_t)num_blocks * (2 * block_size * K + 4) * sizeof(int));
         cudaMemset(d_ctop, 0, (size_t)my_cnt * sizeof(int));
 
-        size_t smem_reload = (size_t)(block_size / 32) * (maxd + 1) * 32 * sizeof(int4);   // 宏内变量名对齐（+1 保护槽）
+        size_t smem_reload = (size_t)(block_size / 32) * (maxd + 1) * 32 * sizeof(int4);
+    { const char *e = getenv("NQ_SMEM_PAD"); if (e) smem_reload += atoi(e); }   // 实验：模拟更大 N 的每块 smem   // 宏内变量名对齐（+1 保护槽）
         switch (n) {
             LAUNCH_N(6)  LAUNCH_N(7)  LAUNCH_N(8)  LAUNCH_N(9)  LAUNCH_N(10)
             LAUNCH_N(11) LAUNCH_N(12) LAUNCH_N(13) LAUNCH_N(14) LAUNCH_N(15)
@@ -465,6 +474,14 @@ long long cuda_solve(int n, int preset_queens) {
     //   r6（24 层）：b=64 → 仅 3 块 = 6 warps（更差！），b=128 → 2 块 × 4 = 8 warps
     if (n == 28)
         block_size = (preset_queens >= 7) ? 64 : 128;
+
+    // N=25/26 r7（栈 20/21 层）：单 warp 块只能驻留 8 块（8 warps）。把每块 1KB 固定开销
+    // 摊到 3 个 warp 上：3 块 × 3 warp = 9 warps/SM（cudaOccupancy API 实测；N=26 的
+    // 32,256B 动态 smem 用 N=25 + pad 模拟验证，同为 3 块）。3 warp 同块有轮次耦合：
+    // N=22 代理实测 104.6s vs 8 个独立 warp 108.4s = 净 +3.5%（9 独立 warp 为 99.0s），
+    // 任务越大每轮“有 lane 提前结束”的概率越低，N=25/26 的耦合应更小。
+    if ((n == 25 || n == 26) && preset_queens >= 7)
+        block_size = 96;
     {   // 实验开关：NQ_BLOCK 环境变量可覆盖按 N 表（便于扫描，不影响正常使用）
         const char *bs_env = getenv("NQ_BLOCK");
         if (bs_env)
