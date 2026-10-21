@@ -1208,3 +1208,11 @@ An instrumented campaign (per-thread iteration counters, warp-level analysis, oc
 - Counts exact at N=6..20 (presets 4..7) and the N=28 split encoding forced on at N=12/16/18/20.
 - Measured (single RTX 4090): N=20 r7 1144 -> 1088 ms (**-4.9%**), N=21 9.78 -> 9.46 s (**-3.2%**), N=22 85.85 -> 83.40 s (**-2.9%**).
 - Revised 8x5090 estimates: N=26 ~23.1-25.9h, N=27 ~10.9-12.3d, N=28 ~113-128d. Cumulative vs the pre-#67 kernel: N=20 ~-13%, N=22 ~-10%.
+
+## Attempt #70: unroll x8 enabled by the idempotent guard (2026-10-22)
+
+- After #69 the guard body is **idempotent**: its ret is 0, so `top = ret` keeps top at 0 and the body can be executed any number of times without an out-of-bounds read. (Before #69 the guard body decremented top to -1, so a third body would have read slot -2.)
+- Therefore the hot loop can be unrolled x8 with **no mid-loop top check**: lanes that finish early spin on the guard until the end of the group. The loop back-edge (PC sampling showed it waiting on the body's results, ~9% of stall samples) is amortized 8x, and the loop-overhead instructions drop from ~1.5 to ~0.4 per iteration.
+- Counts exact at N=6..20 (presets 4..7).
+- Measured (single RTX 4090, uncontended): N=20 r7 1093 -> 1055 ms (**-3.5%**), N=21 9.49 -> 8.80 s (**-7.2%**), N=22 82.9 -> 76.0 s (**-8.3%**); unroll x16 is 0.5% worse than x8 at N=21/22, so x8 is the sweet spot. The gain grows with N (the larger-N runs are more latency-bound at lower occupancy).
+- Revised 8x5090 estimates (conservative -8% on the post-#69 numbers): N=26 ~21.3-23.8h, N=27 ~10.0-11.3d, N=28 ~104-118d.

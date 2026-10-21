@@ -169,6 +169,8 @@ n_queens_kernel(
                 int budget = slice;
 
                 // --- 回溯循环（手工 unroll×2；预算到期即让出） ---
+                // 手工 unroll×8：保护层在 #69 后是幂等的（弹栈 top=ret=0 保持不变），
+                // 提前结束的 lane 在保护层上空转到组末，无需任何中途 top 检查。
                 while (top > 0 && budget > 0) {
                     {
                     int4 e = stk[sbase + (top - 1) * 32];
@@ -264,7 +266,289 @@ n_queens_kernel(
                         top++;
                     }
                     }
-                    budget -= 2;
+                    {
+                    int4 e = stk[sbase + (top - 1) * 32];
+                    unsigned int cur0 = (unsigned int)e.x & last;   // 去掉 ret 位
+                    unsigned int right = (unsigned int)e.z;
+                    unsigned int retplus;   // 本层弹栈后 top 应变成的值（“返回槽”）
+                    if constexpr (N <= 27) {
+                        retplus = (unsigned int)e.x >> N;                 // 5 位在 cur 高位
+                    } else {
+                        retplus = ((unsigned int)e.x >> N) | (((unsigned int)e.z >> 28) << 4);
+                        right &= last;                                    // N=28：right 第 28 位存第 5 位
+                    }
+                    unsigned int left = (unsigned int)e.y;
+                    unsigned int residual = (unsigned int)e.w;
+                    // 行号只依赖 top → 与状态载入并行发射
+                    const unsigned int jrow = jkl_queens[start + top];
+
+                    unsigned int p = residual & (0u - residual);   // 最低可用位
+                    residual -= p;
+                    stk[sbase + (top - 1) * 32].w = (int)residual; // 存回残余候选
+                    const bool exhausted = (residual == 0);
+
+                    unsigned int cur = cur0 | p;
+                    left = (left | p) << 1;
+                    right = __umulhi(right | p, 0x80000000u);   // == (right|p)>>1，走 FMA 管
+
+                    unsigned int occ, child;
+                    asm("lop3.b32 %0, %1, %2, %3, 0xfe;" : "=r"(occ) : "r"(cur), "r"(left), "r"(right));
+                    asm("lop3.b32 %0, %1, %2, %3, 0x02;" : "=r"(child) : "r"(occ), "r"(jrow), "r"(last));
+
+                    if (top == leaf_top || child == 0) {
+                        // 叶子行(N-2)：child 的 popc 即解数；死胡同 child==0 加 0
+                        solutions += __popc(child);
+                        if (exhausted) top = (int)retplus;         // 弹栈：直接返回最近活祖先的下一槽
+                    } else {
+                        // 父层活着 → 子层弹回父槽（ret'=top）；父层已死 → 继承父层的返回槽
+                        const unsigned int nret = exhausted ? retplus : (unsigned int)top;
+                        unsigned int ncur = cur, nright = right;
+                        if constexpr (N <= 27) {
+                            ncur = cur | (nret << N);
+                        } else {
+                            ncur = cur | ((nret & 15u) << N);
+                            nright = right | ((nret >> 4) << N);
+                        }
+                        stk[sbase + top * 32] = make_int4((int)ncur, (int)left, (int)nright, (int)child);
+                        top++;
+                    }
+                    }
+                    {
+                    int4 e = stk[sbase + (top - 1) * 32];
+                    unsigned int cur0 = (unsigned int)e.x & last;   // 去掉 ret 位
+                    unsigned int right = (unsigned int)e.z;
+                    unsigned int retplus;   // 本层弹栈后 top 应变成的值（“返回槽”）
+                    if constexpr (N <= 27) {
+                        retplus = (unsigned int)e.x >> N;                 // 5 位在 cur 高位
+                    } else {
+                        retplus = ((unsigned int)e.x >> N) | (((unsigned int)e.z >> 28) << 4);
+                        right &= last;                                    // N=28：right 第 28 位存第 5 位
+                    }
+                    unsigned int left = (unsigned int)e.y;
+                    unsigned int residual = (unsigned int)e.w;
+                    // 行号只依赖 top → 与状态载入并行发射
+                    const unsigned int jrow = jkl_queens[start + top];
+
+                    unsigned int p = residual & (0u - residual);   // 最低可用位
+                    residual -= p;
+                    stk[sbase + (top - 1) * 32].w = (int)residual; // 存回残余候选
+                    const bool exhausted = (residual == 0);
+
+                    unsigned int cur = cur0 | p;
+                    left = (left | p) << 1;
+                    right = __umulhi(right | p, 0x80000000u);   // == (right|p)>>1，走 FMA 管
+
+                    unsigned int occ, child;
+                    asm("lop3.b32 %0, %1, %2, %3, 0xfe;" : "=r"(occ) : "r"(cur), "r"(left), "r"(right));
+                    asm("lop3.b32 %0, %1, %2, %3, 0x02;" : "=r"(child) : "r"(occ), "r"(jrow), "r"(last));
+
+                    if (top == leaf_top || child == 0) {
+                        // 叶子行(N-2)：child 的 popc 即解数；死胡同 child==0 加 0
+                        solutions += __popc(child);
+                        if (exhausted) top = (int)retplus;         // 弹栈：直接返回最近活祖先的下一槽
+                    } else {
+                        // 父层活着 → 子层弹回父槽（ret'=top）；父层已死 → 继承父层的返回槽
+                        const unsigned int nret = exhausted ? retplus : (unsigned int)top;
+                        unsigned int ncur = cur, nright = right;
+                        if constexpr (N <= 27) {
+                            ncur = cur | (nret << N);
+                        } else {
+                            ncur = cur | ((nret & 15u) << N);
+                            nright = right | ((nret >> 4) << N);
+                        }
+                        stk[sbase + top * 32] = make_int4((int)ncur, (int)left, (int)nright, (int)child);
+                        top++;
+                    }
+                    }
+                    {
+                    int4 e = stk[sbase + (top - 1) * 32];
+                    unsigned int cur0 = (unsigned int)e.x & last;   // 去掉 ret 位
+                    unsigned int right = (unsigned int)e.z;
+                    unsigned int retplus;   // 本层弹栈后 top 应变成的值（“返回槽”）
+                    if constexpr (N <= 27) {
+                        retplus = (unsigned int)e.x >> N;                 // 5 位在 cur 高位
+                    } else {
+                        retplus = ((unsigned int)e.x >> N) | (((unsigned int)e.z >> 28) << 4);
+                        right &= last;                                    // N=28：right 第 28 位存第 5 位
+                    }
+                    unsigned int left = (unsigned int)e.y;
+                    unsigned int residual = (unsigned int)e.w;
+                    // 行号只依赖 top → 与状态载入并行发射
+                    const unsigned int jrow = jkl_queens[start + top];
+
+                    unsigned int p = residual & (0u - residual);   // 最低可用位
+                    residual -= p;
+                    stk[sbase + (top - 1) * 32].w = (int)residual; // 存回残余候选
+                    const bool exhausted = (residual == 0);
+
+                    unsigned int cur = cur0 | p;
+                    left = (left | p) << 1;
+                    right = __umulhi(right | p, 0x80000000u);   // == (right|p)>>1，走 FMA 管
+
+                    unsigned int occ, child;
+                    asm("lop3.b32 %0, %1, %2, %3, 0xfe;" : "=r"(occ) : "r"(cur), "r"(left), "r"(right));
+                    asm("lop3.b32 %0, %1, %2, %3, 0x02;" : "=r"(child) : "r"(occ), "r"(jrow), "r"(last));
+
+                    if (top == leaf_top || child == 0) {
+                        // 叶子行(N-2)：child 的 popc 即解数；死胡同 child==0 加 0
+                        solutions += __popc(child);
+                        if (exhausted) top = (int)retplus;         // 弹栈：直接返回最近活祖先的下一槽
+                    } else {
+                        // 父层活着 → 子层弹回父槽（ret'=top）；父层已死 → 继承父层的返回槽
+                        const unsigned int nret = exhausted ? retplus : (unsigned int)top;
+                        unsigned int ncur = cur, nright = right;
+                        if constexpr (N <= 27) {
+                            ncur = cur | (nret << N);
+                        } else {
+                            ncur = cur | ((nret & 15u) << N);
+                            nright = right | ((nret >> 4) << N);
+                        }
+                        stk[sbase + top * 32] = make_int4((int)ncur, (int)left, (int)nright, (int)child);
+                        top++;
+                    }
+                    }
+                    {
+                    int4 e = stk[sbase + (top - 1) * 32];
+                    unsigned int cur0 = (unsigned int)e.x & last;   // 去掉 ret 位
+                    unsigned int right = (unsigned int)e.z;
+                    unsigned int retplus;   // 本层弹栈后 top 应变成的值（“返回槽”）
+                    if constexpr (N <= 27) {
+                        retplus = (unsigned int)e.x >> N;                 // 5 位在 cur 高位
+                    } else {
+                        retplus = ((unsigned int)e.x >> N) | (((unsigned int)e.z >> 28) << 4);
+                        right &= last;                                    // N=28：right 第 28 位存第 5 位
+                    }
+                    unsigned int left = (unsigned int)e.y;
+                    unsigned int residual = (unsigned int)e.w;
+                    // 行号只依赖 top → 与状态载入并行发射
+                    const unsigned int jrow = jkl_queens[start + top];
+
+                    unsigned int p = residual & (0u - residual);   // 最低可用位
+                    residual -= p;
+                    stk[sbase + (top - 1) * 32].w = (int)residual; // 存回残余候选
+                    const bool exhausted = (residual == 0);
+
+                    unsigned int cur = cur0 | p;
+                    left = (left | p) << 1;
+                    right = __umulhi(right | p, 0x80000000u);   // == (right|p)>>1，走 FMA 管
+
+                    unsigned int occ, child;
+                    asm("lop3.b32 %0, %1, %2, %3, 0xfe;" : "=r"(occ) : "r"(cur), "r"(left), "r"(right));
+                    asm("lop3.b32 %0, %1, %2, %3, 0x02;" : "=r"(child) : "r"(occ), "r"(jrow), "r"(last));
+
+                    if (top == leaf_top || child == 0) {
+                        // 叶子行(N-2)：child 的 popc 即解数；死胡同 child==0 加 0
+                        solutions += __popc(child);
+                        if (exhausted) top = (int)retplus;         // 弹栈：直接返回最近活祖先的下一槽
+                    } else {
+                        // 父层活着 → 子层弹回父槽（ret'=top）；父层已死 → 继承父层的返回槽
+                        const unsigned int nret = exhausted ? retplus : (unsigned int)top;
+                        unsigned int ncur = cur, nright = right;
+                        if constexpr (N <= 27) {
+                            ncur = cur | (nret << N);
+                        } else {
+                            ncur = cur | ((nret & 15u) << N);
+                            nright = right | ((nret >> 4) << N);
+                        }
+                        stk[sbase + top * 32] = make_int4((int)ncur, (int)left, (int)nright, (int)child);
+                        top++;
+                    }
+                    }
+                    {
+                    int4 e = stk[sbase + (top - 1) * 32];
+                    unsigned int cur0 = (unsigned int)e.x & last;   // 去掉 ret 位
+                    unsigned int right = (unsigned int)e.z;
+                    unsigned int retplus;   // 本层弹栈后 top 应变成的值（“返回槽”）
+                    if constexpr (N <= 27) {
+                        retplus = (unsigned int)e.x >> N;                 // 5 位在 cur 高位
+                    } else {
+                        retplus = ((unsigned int)e.x >> N) | (((unsigned int)e.z >> 28) << 4);
+                        right &= last;                                    // N=28：right 第 28 位存第 5 位
+                    }
+                    unsigned int left = (unsigned int)e.y;
+                    unsigned int residual = (unsigned int)e.w;
+                    // 行号只依赖 top → 与状态载入并行发射
+                    const unsigned int jrow = jkl_queens[start + top];
+
+                    unsigned int p = residual & (0u - residual);   // 最低可用位
+                    residual -= p;
+                    stk[sbase + (top - 1) * 32].w = (int)residual; // 存回残余候选
+                    const bool exhausted = (residual == 0);
+
+                    unsigned int cur = cur0 | p;
+                    left = (left | p) << 1;
+                    right = __umulhi(right | p, 0x80000000u);   // == (right|p)>>1，走 FMA 管
+
+                    unsigned int occ, child;
+                    asm("lop3.b32 %0, %1, %2, %3, 0xfe;" : "=r"(occ) : "r"(cur), "r"(left), "r"(right));
+                    asm("lop3.b32 %0, %1, %2, %3, 0x02;" : "=r"(child) : "r"(occ), "r"(jrow), "r"(last));
+
+                    if (top == leaf_top || child == 0) {
+                        // 叶子行(N-2)：child 的 popc 即解数；死胡同 child==0 加 0
+                        solutions += __popc(child);
+                        if (exhausted) top = (int)retplus;         // 弹栈：直接返回最近活祖先的下一槽
+                    } else {
+                        // 父层活着 → 子层弹回父槽（ret'=top）；父层已死 → 继承父层的返回槽
+                        const unsigned int nret = exhausted ? retplus : (unsigned int)top;
+                        unsigned int ncur = cur, nright = right;
+                        if constexpr (N <= 27) {
+                            ncur = cur | (nret << N);
+                        } else {
+                            ncur = cur | ((nret & 15u) << N);
+                            nright = right | ((nret >> 4) << N);
+                        }
+                        stk[sbase + top * 32] = make_int4((int)ncur, (int)left, (int)nright, (int)child);
+                        top++;
+                    }
+                    }
+                    {
+                    int4 e = stk[sbase + (top - 1) * 32];
+                    unsigned int cur0 = (unsigned int)e.x & last;   // 去掉 ret 位
+                    unsigned int right = (unsigned int)e.z;
+                    unsigned int retplus;   // 本层弹栈后 top 应变成的值（“返回槽”）
+                    if constexpr (N <= 27) {
+                        retplus = (unsigned int)e.x >> N;                 // 5 位在 cur 高位
+                    } else {
+                        retplus = ((unsigned int)e.x >> N) | (((unsigned int)e.z >> 28) << 4);
+                        right &= last;                                    // N=28：right 第 28 位存第 5 位
+                    }
+                    unsigned int left = (unsigned int)e.y;
+                    unsigned int residual = (unsigned int)e.w;
+                    // 行号只依赖 top → 与状态载入并行发射
+                    const unsigned int jrow = jkl_queens[start + top];
+
+                    unsigned int p = residual & (0u - residual);   // 最低可用位
+                    residual -= p;
+                    stk[sbase + (top - 1) * 32].w = (int)residual; // 存回残余候选
+                    const bool exhausted = (residual == 0);
+
+                    unsigned int cur = cur0 | p;
+                    left = (left | p) << 1;
+                    right = __umulhi(right | p, 0x80000000u);   // == (right|p)>>1，走 FMA 管
+
+                    unsigned int occ, child;
+                    asm("lop3.b32 %0, %1, %2, %3, 0xfe;" : "=r"(occ) : "r"(cur), "r"(left), "r"(right));
+                    asm("lop3.b32 %0, %1, %2, %3, 0x02;" : "=r"(child) : "r"(occ), "r"(jrow), "r"(last));
+
+                    if (top == leaf_top || child == 0) {
+                        // 叶子行(N-2)：child 的 popc 即解数；死胡同 child==0 加 0
+                        solutions += __popc(child);
+                        if (exhausted) top = (int)retplus;         // 弹栈：直接返回最近活祖先的下一槽
+                    } else {
+                        // 父层活着 → 子层弹回父槽（ret'=top）；父层已死 → 继承父层的返回槽
+                        const unsigned int nret = exhausted ? retplus : (unsigned int)top;
+                        unsigned int ncur = cur, nright = right;
+                        if constexpr (N <= 27) {
+                            ncur = cur | (nret << N);
+                        } else {
+                            ncur = cur | ((nret & 15u) << N);
+                            nright = right | ((nret >> 4) << N);
+                        }
+                        stk[sbase + top * 32] = make_int4((int)ncur, (int)left, (int)nright, (int)child);
+                        top++;
+                    }
+                    }
+                    budget -= 8;
                 }
 
                 finished = (top <= 0);
