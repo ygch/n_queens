@@ -172,14 +172,14 @@ n_queens_kernel(
                 while (top > 0 && budget > 0) {
                     {
                     int4 e = stk[sbase + (top - 1) * 32];
-                    unsigned int cur0 = (unsigned int)e.x & last;   // 去掉 skip 位
+                    unsigned int cur0 = (unsigned int)e.x & last;   // 去掉 ret 位
                     unsigned int right = (unsigned int)e.z;
-                    unsigned int skipext;
+                    unsigned int retplus;   // 本层弹栈后 top 应变成的值（“返回槽”）
                     if constexpr (N <= 27) {
-                        skipext = (unsigned int)e.x >> N;                 // skip 5 位在 cur 高位
+                        retplus = (unsigned int)e.x >> N;                 // 5 位在 cur 高位
                     } else {
-                        skipext = ((unsigned int)e.x >> N) | (((unsigned int)e.z >> 28) << 4);
-                        right &= last;                                    // N=28：right 第 28 位存 skip 第 5 位
+                        retplus = ((unsigned int)e.x >> N) | (((unsigned int)e.z >> 28) << 4);
+                        right &= last;                                    // N=28：right 第 28 位存第 5 位
                     }
                     unsigned int left = (unsigned int)e.y;
                     unsigned int residual = (unsigned int)e.w;
@@ -202,15 +202,16 @@ n_queens_kernel(
                     if (top == leaf_top || child == 0) {
                         // 叶子行(N-2)：child 的 popc 即解数；死胡同 child==0 加 0
                         solutions += __popc(child);
-                        if (exhausted) top -= 1 + (int)skipext;    // 弹栈；一次跳过整条死祖先链
+                        if (exhausted) top = (int)retplus;         // 弹栈：直接返回最近活祖先的下一槽
                     } else {
-                        const unsigned int nskip = exhausted ? skipext + 1 : 0u;
+                        // 父层活着 → 子层弹回父槽（ret'=top）；父层已死 → 继承父层的返回槽
+                        const unsigned int nret = exhausted ? retplus : (unsigned int)top;
                         unsigned int ncur = cur, nright = right;
                         if constexpr (N <= 27) {
-                            ncur = cur | (nskip << N);
+                            ncur = cur | (nret << N);
                         } else {
-                            ncur = cur | ((nskip & 15u) << N);
-                            nright = right | ((nskip >> 4) << N);
+                            ncur = cur | ((nret & 15u) << N);
+                            nright = right | ((nret >> 4) << N);
                         }
                         stk[sbase + top * 32] = make_int4((int)ncur, (int)left, (int)nright, (int)child);
                         top++;
@@ -218,14 +219,14 @@ n_queens_kernel(
                     }
                     {
                     int4 e = stk[sbase + (top - 1) * 32];
-                    unsigned int cur0 = (unsigned int)e.x & last;   // 去掉 skip 位
+                    unsigned int cur0 = (unsigned int)e.x & last;   // 去掉 ret 位
                     unsigned int right = (unsigned int)e.z;
-                    unsigned int skipext;
+                    unsigned int retplus;   // 本层弹栈后 top 应变成的值（“返回槽”）
                     if constexpr (N <= 27) {
-                        skipext = (unsigned int)e.x >> N;                 // skip 5 位在 cur 高位
+                        retplus = (unsigned int)e.x >> N;                 // 5 位在 cur 高位
                     } else {
-                        skipext = ((unsigned int)e.x >> N) | (((unsigned int)e.z >> 28) << 4);
-                        right &= last;                                    // N=28：right 第 28 位存 skip 第 5 位
+                        retplus = ((unsigned int)e.x >> N) | (((unsigned int)e.z >> 28) << 4);
+                        right &= last;                                    // N=28：right 第 28 位存第 5 位
                     }
                     unsigned int left = (unsigned int)e.y;
                     unsigned int residual = (unsigned int)e.w;
@@ -248,15 +249,16 @@ n_queens_kernel(
                     if (top == leaf_top || child == 0) {
                         // 叶子行(N-2)：child 的 popc 即解数；死胡同 child==0 加 0
                         solutions += __popc(child);
-                        if (exhausted) top -= 1 + (int)skipext;    // 弹栈；一次跳过整条死祖先链
+                        if (exhausted) top = (int)retplus;         // 弹栈：直接返回最近活祖先的下一槽
                     } else {
-                        const unsigned int nskip = exhausted ? skipext + 1 : 0u;
+                        // 父层活着 → 子层弹回父槽（ret'=top）；父层已死 → 继承父层的返回槽
+                        const unsigned int nret = exhausted ? retplus : (unsigned int)top;
                         unsigned int ncur = cur, nright = right;
                         if constexpr (N <= 27) {
-                            ncur = cur | (nskip << N);
+                            ncur = cur | (nret << N);
                         } else {
-                            ncur = cur | ((nskip & 15u) << N);
-                            nright = right | ((nskip >> 4) << N);
+                            ncur = cur | ((nret & 15u) << N);
+                            nright = right | ((nret >> 4) << N);
                         }
                         stk[sbase + top * 32] = make_int4((int)ncur, (int)left, (int)nright, (int)child);
                         top++;

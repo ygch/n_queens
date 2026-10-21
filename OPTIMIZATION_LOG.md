@@ -1198,3 +1198,13 @@ An instrumented campaign (per-thread iteration counters, warp-level analysis, oc
 - N=20 r7: 1201 -> 1145 ms (**-4.8%**), N=21 r7: 10.24 -> 9.92 s (**-3.0%**), N=22 r7: 89.0 -> 86.7 s (**-2.6%**).
 - Registers 48 -> 56 (occupancy unchanged, smem-bound).
 - Revised 8x5090 estimates after #68: N=26 ~23.8-26.7h, N=27 ~11.2-12.7d, N=28 ~117-132d.
+
+## Attempt #69: ret (return-slot) encoding replaces the dead-ancestor skip count (2026-10-21)
+
+- Each depth-indexed stack state now stores the `top` value to restore when it pops ("return slot") instead of the number of dead ancestors:
+  push does `ret' = exhausted ? ret : top`, pop does `top = ret`.
+  This removes one add and one subtract from the pop path (the skip version did `top -= 1+skip`) and one add from the push path; same 5-bit packing (cur high bits for N<=27; N=28 splits it into 4 bits of cur + bit 28 of right).
+- The guard's ret is 0, so a finished lane's guard body ends with `top = 0` and the loop exits exactly as before.
+- Counts exact at N=6..20 (presets 4..7) and the N=28 split encoding forced on at N=12/16/18/20.
+- Measured (single RTX 4090): N=20 r7 1144 -> 1088 ms (**-4.9%**), N=21 9.78 -> 9.46 s (**-3.2%**), N=22 85.85 -> 83.40 s (**-2.9%**).
+- Revised 8x5090 estimates: N=26 ~23.1-25.9h, N=27 ~10.9-12.3d, N=28 ~113-128d. Cumulative vs the pre-#67 kernel: N=20 ~-13%, N=22 ~-10%.
