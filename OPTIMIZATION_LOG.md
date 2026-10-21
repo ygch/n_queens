@@ -1181,3 +1181,20 @@ An instrumented campaign (per-thread iteration counters, warp-level analysis, oc
 - Measured (counts exact): N=20 r7 1249->1201ms (**-3.6%**), N=21 r7 10.75->10.40s (**-3.3%**), N=22 r7 93.6->89.2s (**-4.7%**).
 
 **5. Also refuted this round**: 32-bit per-slice leaf accumulator (48->56 regs, -0.5%), k/l row skipping with per-depth level tables (nodes -9% exact, but the data-dependent row shift costs the same), row-order permutations (natural is optimal for N>=14), local-memory stack (25x slower), register-carry + speculative prefetch (+56%).
+
+## Attempt #68: depth-indexed stack + dead-ancestor skip count (2026-10-21)
+
+**1. Root cause found by PC sampling (source page, -lineinfo, application replay)**
+- Top stall sites in the hot loop (N=20): `POPC` waiting on the state LDS (496k + 324k samples, short_sb 466k/305k), the `child != 0` LOP3 waiting on the jkl LDS (242k + 225k), and the stack-address IMADs waiting on the previous push/pop predicates (143k + 139k, wait ~125k).
+- i.e. the two smem loads were serialized by `popc(cur)` because the compacting stack made the slot index differ from the path depth.
+
+**2. Depth-indexed stack + skip count**
+- The stack no longer compacts on pop+push: slot index = path depth, so the jkl row is `start + top` (depends only on `top`); the state LDS and the jkl LDS issue back-to-back and independently, and the POPC disappears entirely (SASS: `LDS R15,[R21.X4]` then `LDS.128` with no dependency).
+- The compaction's benefit (no extra iteration for an exhausted level that pushes) is replaced by a skip count: each state stores how many consecutive dead ancestors to skip; child.skip = exhausted ? 1+skip : 0; pop does top -= 1+skip. The count lives in the free high bits of `cur` (5 bits for N<=27; for N=28, 4 bits in cur + bit 28 of `right`).
+- `col` is masked to N bits at task setup to free those bits.
+- Logic validated on CPU against the reference DFS for every constellation at N=8/10/12 (0 mismatches), and the N=28 split encoding was forced on for N=12/16/18/20 (counts exact).
+
+**3. Measured (counts exact at N=6..20, presets 4..7)**
+- N=20 r7: 1201 -> 1145 ms (**-4.8%**), N=21 r7: 10.24 -> 9.92 s (**-3.0%**), N=22 r7: 89.0 -> 86.7 s (**-2.6%**).
+- Registers 48 -> 56 (occupancy unchanged, smem-bound).
+- Revised 8x5090 estimates after #68: N=26 ~23.8-26.7h, N=27 ~11.2-12.7d, N=28 ~117-132d.

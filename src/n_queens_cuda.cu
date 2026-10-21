@@ -131,7 +131,7 @@ n_queens_kernel(
             const int start = c.start_ijkl >> 20;
             unsigned int ld = (unsigned int)c.ld;
             unsigned int rd = (unsigned int)c.rd;
-            unsigned int col = ~(L - 2) ^ (unsigned int)c.col;
+            unsigned int col = (~(L - 2) ^ (unsigned int)c.col) & last;   // 裁到 N 位，高位存“死祖先计数”
             const int k_val = (c.start_ijkl >> 5) & 31;
             const int l_val = c.start_ijkl & 31;
             if (k_val >= start)
@@ -162,11 +162,9 @@ n_queens_kernel(
             }
 
             if (!finished) {
-                const int init_pc = __popc(col);
-                // pc = popc(cur|p) = popc(cur)+1（p 必为 cur 的新位）→ POPC 可脱离 p 的依赖链，
-                // jkl 的地址因此提前 ~3 个 ALU 延迟算出，缩短循环携带链。
-                const int leaf_pc1 = init_pc + (N - start - 3);   // 判定用 popc(cur)（放置前）
-                const int jrow_base1 = start - init_pc + 1;
+                // 深度索引栈：槽位=深度 ⇒ 行号 = start+top，只依赖 top（两次 LDS 可并行发射）。
+                // 压缩弹栈用“死祖先计数” skip 替代：压子时 skip'=耗尽?1+skip:0，弹栈 top-=1+skip。
+                const int leaf_top = N - start - 2;
                 stk[sbase - 32] = make_int4((int)col, (int)last, (int)last, 0);  // 保护槽
                 int budget = slice;
 
@@ -174,63 +172,93 @@ n_queens_kernel(
                 while (top > 0 && budget > 0) {
                     {
                     int4 e = stk[sbase + (top - 1) * 32];
-                    unsigned int cur0 = (unsigned int)e.x;
-                    unsigned int left = (unsigned int)e.y;
+                    unsigned int cur0 = (unsigned int)e.x & last;   // 去掉 skip 位
                     unsigned int right = (unsigned int)e.z;
+                    unsigned int skipext;
+                    if constexpr (N <= 27) {
+                        skipext = (unsigned int)e.x >> N;                 // skip 5 位在 cur 高位
+                    } else {
+                        skipext = ((unsigned int)e.x >> N) | (((unsigned int)e.z >> 28) << 4);
+                        right &= last;                                    // N=28：right 第 28 位存 skip 第 5 位
+                    }
+                    unsigned int left = (unsigned int)e.y;
                     unsigned int residual = (unsigned int)e.w;
-                    int pc0 = __popc(cur0);                        // 与 p 无关，可立即发射
+                    // 行号只依赖 top → 与状态载入并行发射
+                    const unsigned int jrow = jkl_queens[start + top];
 
                     unsigned int p = residual & (0u - residual);   // 最低可用位
                     residual -= p;
                     stk[sbase + (top - 1) * 32].w = (int)residual; // 存回残余候选
-                    if (residual == 0)
-                        top--;                                     // 本层耗尽 → 弹栈
+                    const bool exhausted = (residual == 0);
 
                     unsigned int cur = cur0 | p;
                     left = (left | p) << 1;
                     right = __umulhi(right | p, 0x80000000u);   // == (right|p)>>1，走 FMA 管
 
-                    const unsigned int jrow = jkl_queens[jrow_base1 + pc0];
                     unsigned int occ, child;
                     asm("lop3.b32 %0, %1, %2, %3, 0xfe;" : "=r"(occ) : "r"(cur), "r"(left), "r"(right));
                     asm("lop3.b32 %0, %1, %2, %3, 0x02;" : "=r"(child) : "r"(occ), "r"(jrow), "r"(last));
 
-                    if (pc0 == leaf_pc1 || child == 0) {
+                    if (top == leaf_top || child == 0) {
                         // 叶子行(N-2)：child 的 popc 即解数；死胡同 child==0 加 0
                         solutions += __popc(child);
+                        if (exhausted) top -= 1 + (int)skipext;    // 弹栈；一次跳过整条死祖先链
                     } else {
-                        stk[sbase + top * 32] = make_int4((int)cur, (int)left, (int)right, (int)child);
+                        const unsigned int nskip = exhausted ? skipext + 1 : 0u;
+                        unsigned int ncur = cur, nright = right;
+                        if constexpr (N <= 27) {
+                            ncur = cur | (nskip << N);
+                        } else {
+                            ncur = cur | ((nskip & 15u) << N);
+                            nright = right | ((nskip >> 4) << N);
+                        }
+                        stk[sbase + top * 32] = make_int4((int)ncur, (int)left, (int)nright, (int)child);
                         top++;
                     }
                     }
                     {
                     int4 e = stk[sbase + (top - 1) * 32];
-                    unsigned int cur0 = (unsigned int)e.x;
-                    unsigned int left = (unsigned int)e.y;
+                    unsigned int cur0 = (unsigned int)e.x & last;   // 去掉 skip 位
                     unsigned int right = (unsigned int)e.z;
+                    unsigned int skipext;
+                    if constexpr (N <= 27) {
+                        skipext = (unsigned int)e.x >> N;                 // skip 5 位在 cur 高位
+                    } else {
+                        skipext = ((unsigned int)e.x >> N) | (((unsigned int)e.z >> 28) << 4);
+                        right &= last;                                    // N=28：right 第 28 位存 skip 第 5 位
+                    }
+                    unsigned int left = (unsigned int)e.y;
                     unsigned int residual = (unsigned int)e.w;
-                    int pc0 = __popc(cur0);                        // 与 p 无关，可立即发射
+                    // 行号只依赖 top → 与状态载入并行发射
+                    const unsigned int jrow = jkl_queens[start + top];
 
                     unsigned int p = residual & (0u - residual);   // 最低可用位
                     residual -= p;
                     stk[sbase + (top - 1) * 32].w = (int)residual; // 存回残余候选
-                    if (residual == 0)
-                        top--;                                     // 本层耗尽 → 弹栈
+                    const bool exhausted = (residual == 0);
 
                     unsigned int cur = cur0 | p;
                     left = (left | p) << 1;
                     right = __umulhi(right | p, 0x80000000u);   // == (right|p)>>1，走 FMA 管
 
-                    const unsigned int jrow = jkl_queens[jrow_base1 + pc0];
                     unsigned int occ, child;
                     asm("lop3.b32 %0, %1, %2, %3, 0xfe;" : "=r"(occ) : "r"(cur), "r"(left), "r"(right));
                     asm("lop3.b32 %0, %1, %2, %3, 0x02;" : "=r"(child) : "r"(occ), "r"(jrow), "r"(last));
 
-                    if (pc0 == leaf_pc1 || child == 0) {
+                    if (top == leaf_top || child == 0) {
                         // 叶子行(N-2)：child 的 popc 即解数；死胡同 child==0 加 0
                         solutions += __popc(child);
+                        if (exhausted) top -= 1 + (int)skipext;    // 弹栈；一次跳过整条死祖先链
                     } else {
-                        stk[sbase + top * 32] = make_int4((int)cur, (int)left, (int)right, (int)child);
+                        const unsigned int nskip = exhausted ? skipext + 1 : 0u;
+                        unsigned int ncur = cur, nright = right;
+                        if constexpr (N <= 27) {
+                            ncur = cur | (nskip << N);
+                        } else {
+                            ncur = cur | ((nskip & 15u) << N);
+                            nright = right | ((nskip >> 4) << N);
+                        }
+                        stk[sbase + top * 32] = make_int4((int)ncur, (int)left, (int)nright, (int)child);
                         top++;
                     }
                     }
