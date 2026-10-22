@@ -174,7 +174,8 @@ n_queens_kernel(
                 // 提前结束的 lane 在保护层上空转到组末，无需任何中途 top 检查。
                 while (top > 0 && budget > 0) {
                     {
-                    int4 e = *reinterpret_cast<int4 *>(sp + top * 512 - 512);
+                    int4 *cslot = reinterpret_cast<int4 *>(sp + top * 512 - 512);
+                    int4 e = *cslot;
                     unsigned int cur0 = (unsigned int)e.x & last;   // 去掉 ret 位
                     unsigned int right = (unsigned int)e.z;
                     unsigned int retplus;   // 本层弹栈后 top 应变成的值（“返回槽”）
@@ -191,7 +192,7 @@ n_queens_kernel(
 
                     unsigned int p = residual & (0u - residual);   // 最低可用位
                     residual -= p;
-                    *(int *)(sp + top * 512 - 500) = (int)residual; // 存回残余候选
+                    *(int *)((char *)cslot + 12) = (int)residual; // 存回残余候选
                     const bool exhausted = (residual == 0);
 
                     unsigned int cur = cur0 | p;
@@ -202,11 +203,9 @@ n_queens_kernel(
                     asm("lop3.b32 %0, %1, %2, %3, 0xfe;" : "=r"(occ) : "r"(cur), "r"(left), "r"(right));
                     asm("lop3.b32 %0, %1, %2, %3, 0x02;" : "=r"(child) : "r"(occ), "r"(jrow), "r"(last));
 
-                    if (top == leaf_top || child == 0) {
-                        // 叶子行(N-2)：child 的 popc 即解数；死胡同 child==0 加 0
-                        solutions += __popc(child);
-                        if (exhausted) top = (int)retplus;         // 弹栈：直接返回最近活祖先的下一槽
-                    } else {
+                    const bool push = (top != leaf_top) && (child != 0);
+                    const int ntop = push ? top + 1 : (exhausted ? (int)retplus : top);
+                    if (push) {
                         // 父层活着 → 子层弹回父槽（ret'=top）；父层已死 → 继承父层的返回槽
                         const unsigned int nret = exhausted ? retplus : (unsigned int)top;
                         unsigned int ncur = cur, nright = right;
@@ -216,12 +215,17 @@ n_queens_kernel(
                             ncur = cur | ((nret & 15u) << N);
                             nright = right | ((nret >> 4) << N);
                         }
-                        *reinterpret_cast<int4 *>(sp + top * 512) = make_int4((int)ncur, (int)left, (int)nright, (int)child);
-                        top++;
+                        // 压栈槽 = 当前槽 + 1（cslot+512），复用当前槽地址的立即偏移，无需另算地址
+                        *reinterpret_cast<int4 *>((char *)cslot + 512) = make_int4((int)ncur, (int)left, (int)nright, (int)child);
+                    } else {
+                        // 叶子行(N-2)：child 的 popc 即解数；死胡同 child==0 加 0
+                        solutions += __popc(child);
                     }
+                    top = ntop;
                     }
                     {
-                    int4 e = *reinterpret_cast<int4 *>(sp + top * 512 - 512);
+                    int4 *cslot = reinterpret_cast<int4 *>(sp + top * 512 - 512);
+                    int4 e = *cslot;
                     unsigned int cur0 = (unsigned int)e.x & last;   // 去掉 ret 位
                     unsigned int right = (unsigned int)e.z;
                     unsigned int retplus;   // 本层弹栈后 top 应变成的值（“返回槽”）
@@ -238,7 +242,7 @@ n_queens_kernel(
 
                     unsigned int p = residual & (0u - residual);   // 最低可用位
                     residual -= p;
-                    *(int *)(sp + top * 512 - 500) = (int)residual; // 存回残余候选
+                    *(int *)((char *)cslot + 12) = (int)residual; // 存回残余候选
                     const bool exhausted = (residual == 0);
 
                     unsigned int cur = cur0 | p;
@@ -249,11 +253,9 @@ n_queens_kernel(
                     asm("lop3.b32 %0, %1, %2, %3, 0xfe;" : "=r"(occ) : "r"(cur), "r"(left), "r"(right));
                     asm("lop3.b32 %0, %1, %2, %3, 0x02;" : "=r"(child) : "r"(occ), "r"(jrow), "r"(last));
 
-                    if (top == leaf_top || child == 0) {
-                        // 叶子行(N-2)：child 的 popc 即解数；死胡同 child==0 加 0
-                        solutions += __popc(child);
-                        if (exhausted) top = (int)retplus;         // 弹栈：直接返回最近活祖先的下一槽
-                    } else {
+                    const bool push = (top != leaf_top) && (child != 0);
+                    const int ntop = push ? top + 1 : (exhausted ? (int)retplus : top);
+                    if (push) {
                         // 父层活着 → 子层弹回父槽（ret'=top）；父层已死 → 继承父层的返回槽
                         const unsigned int nret = exhausted ? retplus : (unsigned int)top;
                         unsigned int ncur = cur, nright = right;
@@ -263,12 +265,17 @@ n_queens_kernel(
                             ncur = cur | ((nret & 15u) << N);
                             nright = right | ((nret >> 4) << N);
                         }
-                        *reinterpret_cast<int4 *>(sp + top * 512) = make_int4((int)ncur, (int)left, (int)nright, (int)child);
-                        top++;
+                        // 压栈槽 = 当前槽 + 1（cslot+512），复用当前槽地址的立即偏移，无需另算地址
+                        *reinterpret_cast<int4 *>((char *)cslot + 512) = make_int4((int)ncur, (int)left, (int)nright, (int)child);
+                    } else {
+                        // 叶子行(N-2)：child 的 popc 即解数；死胡同 child==0 加 0
+                        solutions += __popc(child);
                     }
+                    top = ntop;
                     }
                     {
-                    int4 e = *reinterpret_cast<int4 *>(sp + top * 512 - 512);
+                    int4 *cslot = reinterpret_cast<int4 *>(sp + top * 512 - 512);
+                    int4 e = *cslot;
                     unsigned int cur0 = (unsigned int)e.x & last;   // 去掉 ret 位
                     unsigned int right = (unsigned int)e.z;
                     unsigned int retplus;   // 本层弹栈后 top 应变成的值（“返回槽”）
@@ -285,7 +292,7 @@ n_queens_kernel(
 
                     unsigned int p = residual & (0u - residual);   // 最低可用位
                     residual -= p;
-                    *(int *)(sp + top * 512 - 500) = (int)residual; // 存回残余候选
+                    *(int *)((char *)cslot + 12) = (int)residual; // 存回残余候选
                     const bool exhausted = (residual == 0);
 
                     unsigned int cur = cur0 | p;
@@ -296,11 +303,9 @@ n_queens_kernel(
                     asm("lop3.b32 %0, %1, %2, %3, 0xfe;" : "=r"(occ) : "r"(cur), "r"(left), "r"(right));
                     asm("lop3.b32 %0, %1, %2, %3, 0x02;" : "=r"(child) : "r"(occ), "r"(jrow), "r"(last));
 
-                    if (top == leaf_top || child == 0) {
-                        // 叶子行(N-2)：child 的 popc 即解数；死胡同 child==0 加 0
-                        solutions += __popc(child);
-                        if (exhausted) top = (int)retplus;         // 弹栈：直接返回最近活祖先的下一槽
-                    } else {
+                    const bool push = (top != leaf_top) && (child != 0);
+                    const int ntop = push ? top + 1 : (exhausted ? (int)retplus : top);
+                    if (push) {
                         // 父层活着 → 子层弹回父槽（ret'=top）；父层已死 → 继承父层的返回槽
                         const unsigned int nret = exhausted ? retplus : (unsigned int)top;
                         unsigned int ncur = cur, nright = right;
@@ -310,12 +315,17 @@ n_queens_kernel(
                             ncur = cur | ((nret & 15u) << N);
                             nright = right | ((nret >> 4) << N);
                         }
-                        *reinterpret_cast<int4 *>(sp + top * 512) = make_int4((int)ncur, (int)left, (int)nright, (int)child);
-                        top++;
+                        // 压栈槽 = 当前槽 + 1（cslot+512），复用当前槽地址的立即偏移，无需另算地址
+                        *reinterpret_cast<int4 *>((char *)cslot + 512) = make_int4((int)ncur, (int)left, (int)nright, (int)child);
+                    } else {
+                        // 叶子行(N-2)：child 的 popc 即解数；死胡同 child==0 加 0
+                        solutions += __popc(child);
                     }
+                    top = ntop;
                     }
                     {
-                    int4 e = *reinterpret_cast<int4 *>(sp + top * 512 - 512);
+                    int4 *cslot = reinterpret_cast<int4 *>(sp + top * 512 - 512);
+                    int4 e = *cslot;
                     unsigned int cur0 = (unsigned int)e.x & last;   // 去掉 ret 位
                     unsigned int right = (unsigned int)e.z;
                     unsigned int retplus;   // 本层弹栈后 top 应变成的值（“返回槽”）
@@ -332,7 +342,7 @@ n_queens_kernel(
 
                     unsigned int p = residual & (0u - residual);   // 最低可用位
                     residual -= p;
-                    *(int *)(sp + top * 512 - 500) = (int)residual; // 存回残余候选
+                    *(int *)((char *)cslot + 12) = (int)residual; // 存回残余候选
                     const bool exhausted = (residual == 0);
 
                     unsigned int cur = cur0 | p;
@@ -343,11 +353,9 @@ n_queens_kernel(
                     asm("lop3.b32 %0, %1, %2, %3, 0xfe;" : "=r"(occ) : "r"(cur), "r"(left), "r"(right));
                     asm("lop3.b32 %0, %1, %2, %3, 0x02;" : "=r"(child) : "r"(occ), "r"(jrow), "r"(last));
 
-                    if (top == leaf_top || child == 0) {
-                        // 叶子行(N-2)：child 的 popc 即解数；死胡同 child==0 加 0
-                        solutions += __popc(child);
-                        if (exhausted) top = (int)retplus;         // 弹栈：直接返回最近活祖先的下一槽
-                    } else {
+                    const bool push = (top != leaf_top) && (child != 0);
+                    const int ntop = push ? top + 1 : (exhausted ? (int)retplus : top);
+                    if (push) {
                         // 父层活着 → 子层弹回父槽（ret'=top）；父层已死 → 继承父层的返回槽
                         const unsigned int nret = exhausted ? retplus : (unsigned int)top;
                         unsigned int ncur = cur, nright = right;
@@ -357,12 +365,17 @@ n_queens_kernel(
                             ncur = cur | ((nret & 15u) << N);
                             nright = right | ((nret >> 4) << N);
                         }
-                        *reinterpret_cast<int4 *>(sp + top * 512) = make_int4((int)ncur, (int)left, (int)nright, (int)child);
-                        top++;
+                        // 压栈槽 = 当前槽 + 1（cslot+512），复用当前槽地址的立即偏移，无需另算地址
+                        *reinterpret_cast<int4 *>((char *)cslot + 512) = make_int4((int)ncur, (int)left, (int)nright, (int)child);
+                    } else {
+                        // 叶子行(N-2)：child 的 popc 即解数；死胡同 child==0 加 0
+                        solutions += __popc(child);
                     }
+                    top = ntop;
                     }
                     {
-                    int4 e = *reinterpret_cast<int4 *>(sp + top * 512 - 512);
+                    int4 *cslot = reinterpret_cast<int4 *>(sp + top * 512 - 512);
+                    int4 e = *cslot;
                     unsigned int cur0 = (unsigned int)e.x & last;   // 去掉 ret 位
                     unsigned int right = (unsigned int)e.z;
                     unsigned int retplus;   // 本层弹栈后 top 应变成的值（“返回槽”）
@@ -379,7 +392,7 @@ n_queens_kernel(
 
                     unsigned int p = residual & (0u - residual);   // 最低可用位
                     residual -= p;
-                    *(int *)(sp + top * 512 - 500) = (int)residual; // 存回残余候选
+                    *(int *)((char *)cslot + 12) = (int)residual; // 存回残余候选
                     const bool exhausted = (residual == 0);
 
                     unsigned int cur = cur0 | p;
@@ -390,11 +403,9 @@ n_queens_kernel(
                     asm("lop3.b32 %0, %1, %2, %3, 0xfe;" : "=r"(occ) : "r"(cur), "r"(left), "r"(right));
                     asm("lop3.b32 %0, %1, %2, %3, 0x02;" : "=r"(child) : "r"(occ), "r"(jrow), "r"(last));
 
-                    if (top == leaf_top || child == 0) {
-                        // 叶子行(N-2)：child 的 popc 即解数；死胡同 child==0 加 0
-                        solutions += __popc(child);
-                        if (exhausted) top = (int)retplus;         // 弹栈：直接返回最近活祖先的下一槽
-                    } else {
+                    const bool push = (top != leaf_top) && (child != 0);
+                    const int ntop = push ? top + 1 : (exhausted ? (int)retplus : top);
+                    if (push) {
                         // 父层活着 → 子层弹回父槽（ret'=top）；父层已死 → 继承父层的返回槽
                         const unsigned int nret = exhausted ? retplus : (unsigned int)top;
                         unsigned int ncur = cur, nright = right;
@@ -404,12 +415,17 @@ n_queens_kernel(
                             ncur = cur | ((nret & 15u) << N);
                             nright = right | ((nret >> 4) << N);
                         }
-                        *reinterpret_cast<int4 *>(sp + top * 512) = make_int4((int)ncur, (int)left, (int)nright, (int)child);
-                        top++;
+                        // 压栈槽 = 当前槽 + 1（cslot+512），复用当前槽地址的立即偏移，无需另算地址
+                        *reinterpret_cast<int4 *>((char *)cslot + 512) = make_int4((int)ncur, (int)left, (int)nright, (int)child);
+                    } else {
+                        // 叶子行(N-2)：child 的 popc 即解数；死胡同 child==0 加 0
+                        solutions += __popc(child);
                     }
+                    top = ntop;
                     }
                     {
-                    int4 e = *reinterpret_cast<int4 *>(sp + top * 512 - 512);
+                    int4 *cslot = reinterpret_cast<int4 *>(sp + top * 512 - 512);
+                    int4 e = *cslot;
                     unsigned int cur0 = (unsigned int)e.x & last;   // 去掉 ret 位
                     unsigned int right = (unsigned int)e.z;
                     unsigned int retplus;   // 本层弹栈后 top 应变成的值（“返回槽”）
@@ -426,7 +442,7 @@ n_queens_kernel(
 
                     unsigned int p = residual & (0u - residual);   // 最低可用位
                     residual -= p;
-                    *(int *)(sp + top * 512 - 500) = (int)residual; // 存回残余候选
+                    *(int *)((char *)cslot + 12) = (int)residual; // 存回残余候选
                     const bool exhausted = (residual == 0);
 
                     unsigned int cur = cur0 | p;
@@ -437,11 +453,9 @@ n_queens_kernel(
                     asm("lop3.b32 %0, %1, %2, %3, 0xfe;" : "=r"(occ) : "r"(cur), "r"(left), "r"(right));
                     asm("lop3.b32 %0, %1, %2, %3, 0x02;" : "=r"(child) : "r"(occ), "r"(jrow), "r"(last));
 
-                    if (top == leaf_top || child == 0) {
-                        // 叶子行(N-2)：child 的 popc 即解数；死胡同 child==0 加 0
-                        solutions += __popc(child);
-                        if (exhausted) top = (int)retplus;         // 弹栈：直接返回最近活祖先的下一槽
-                    } else {
+                    const bool push = (top != leaf_top) && (child != 0);
+                    const int ntop = push ? top + 1 : (exhausted ? (int)retplus : top);
+                    if (push) {
                         // 父层活着 → 子层弹回父槽（ret'=top）；父层已死 → 继承父层的返回槽
                         const unsigned int nret = exhausted ? retplus : (unsigned int)top;
                         unsigned int ncur = cur, nright = right;
@@ -451,12 +465,17 @@ n_queens_kernel(
                             ncur = cur | ((nret & 15u) << N);
                             nright = right | ((nret >> 4) << N);
                         }
-                        *reinterpret_cast<int4 *>(sp + top * 512) = make_int4((int)ncur, (int)left, (int)nright, (int)child);
-                        top++;
+                        // 压栈槽 = 当前槽 + 1（cslot+512），复用当前槽地址的立即偏移，无需另算地址
+                        *reinterpret_cast<int4 *>((char *)cslot + 512) = make_int4((int)ncur, (int)left, (int)nright, (int)child);
+                    } else {
+                        // 叶子行(N-2)：child 的 popc 即解数；死胡同 child==0 加 0
+                        solutions += __popc(child);
                     }
+                    top = ntop;
                     }
                     {
-                    int4 e = *reinterpret_cast<int4 *>(sp + top * 512 - 512);
+                    int4 *cslot = reinterpret_cast<int4 *>(sp + top * 512 - 512);
+                    int4 e = *cslot;
                     unsigned int cur0 = (unsigned int)e.x & last;   // 去掉 ret 位
                     unsigned int right = (unsigned int)e.z;
                     unsigned int retplus;   // 本层弹栈后 top 应变成的值（“返回槽”）
@@ -473,7 +492,7 @@ n_queens_kernel(
 
                     unsigned int p = residual & (0u - residual);   // 最低可用位
                     residual -= p;
-                    *(int *)(sp + top * 512 - 500) = (int)residual; // 存回残余候选
+                    *(int *)((char *)cslot + 12) = (int)residual; // 存回残余候选
                     const bool exhausted = (residual == 0);
 
                     unsigned int cur = cur0 | p;
@@ -484,11 +503,9 @@ n_queens_kernel(
                     asm("lop3.b32 %0, %1, %2, %3, 0xfe;" : "=r"(occ) : "r"(cur), "r"(left), "r"(right));
                     asm("lop3.b32 %0, %1, %2, %3, 0x02;" : "=r"(child) : "r"(occ), "r"(jrow), "r"(last));
 
-                    if (top == leaf_top || child == 0) {
-                        // 叶子行(N-2)：child 的 popc 即解数；死胡同 child==0 加 0
-                        solutions += __popc(child);
-                        if (exhausted) top = (int)retplus;         // 弹栈：直接返回最近活祖先的下一槽
-                    } else {
+                    const bool push = (top != leaf_top) && (child != 0);
+                    const int ntop = push ? top + 1 : (exhausted ? (int)retplus : top);
+                    if (push) {
                         // 父层活着 → 子层弹回父槽（ret'=top）；父层已死 → 继承父层的返回槽
                         const unsigned int nret = exhausted ? retplus : (unsigned int)top;
                         unsigned int ncur = cur, nright = right;
@@ -498,12 +515,17 @@ n_queens_kernel(
                             ncur = cur | ((nret & 15u) << N);
                             nright = right | ((nret >> 4) << N);
                         }
-                        *reinterpret_cast<int4 *>(sp + top * 512) = make_int4((int)ncur, (int)left, (int)nright, (int)child);
-                        top++;
+                        // 压栈槽 = 当前槽 + 1（cslot+512），复用当前槽地址的立即偏移，无需另算地址
+                        *reinterpret_cast<int4 *>((char *)cslot + 512) = make_int4((int)ncur, (int)left, (int)nright, (int)child);
+                    } else {
+                        // 叶子行(N-2)：child 的 popc 即解数；死胡同 child==0 加 0
+                        solutions += __popc(child);
                     }
+                    top = ntop;
                     }
                     {
-                    int4 e = *reinterpret_cast<int4 *>(sp + top * 512 - 512);
+                    int4 *cslot = reinterpret_cast<int4 *>(sp + top * 512 - 512);
+                    int4 e = *cslot;
                     unsigned int cur0 = (unsigned int)e.x & last;   // 去掉 ret 位
                     unsigned int right = (unsigned int)e.z;
                     unsigned int retplus;   // 本层弹栈后 top 应变成的值（“返回槽”）
@@ -520,7 +542,7 @@ n_queens_kernel(
 
                     unsigned int p = residual & (0u - residual);   // 最低可用位
                     residual -= p;
-                    *(int *)(sp + top * 512 - 500) = (int)residual; // 存回残余候选
+                    *(int *)((char *)cslot + 12) = (int)residual; // 存回残余候选
                     const bool exhausted = (residual == 0);
 
                     unsigned int cur = cur0 | p;
@@ -531,11 +553,9 @@ n_queens_kernel(
                     asm("lop3.b32 %0, %1, %2, %3, 0xfe;" : "=r"(occ) : "r"(cur), "r"(left), "r"(right));
                     asm("lop3.b32 %0, %1, %2, %3, 0x02;" : "=r"(child) : "r"(occ), "r"(jrow), "r"(last));
 
-                    if (top == leaf_top || child == 0) {
-                        // 叶子行(N-2)：child 的 popc 即解数；死胡同 child==0 加 0
-                        solutions += __popc(child);
-                        if (exhausted) top = (int)retplus;         // 弹栈：直接返回最近活祖先的下一槽
-                    } else {
+                    const bool push = (top != leaf_top) && (child != 0);
+                    const int ntop = push ? top + 1 : (exhausted ? (int)retplus : top);
+                    if (push) {
                         // 父层活着 → 子层弹回父槽（ret'=top）；父层已死 → 继承父层的返回槽
                         const unsigned int nret = exhausted ? retplus : (unsigned int)top;
                         unsigned int ncur = cur, nright = right;
@@ -545,9 +565,13 @@ n_queens_kernel(
                             ncur = cur | ((nret & 15u) << N);
                             nright = right | ((nret >> 4) << N);
                         }
-                        *reinterpret_cast<int4 *>(sp + top * 512) = make_int4((int)ncur, (int)left, (int)nright, (int)child);
-                        top++;
+                        // 压栈槽 = 当前槽 + 1（cslot+512），复用当前槽地址的立即偏移，无需另算地址
+                        *reinterpret_cast<int4 *>((char *)cslot + 512) = make_int4((int)ncur, (int)left, (int)nright, (int)child);
+                    } else {
+                        // 叶子行(N-2)：child 的 popc 即解数；死胡同 child==0 加 0
+                        solutions += __popc(child);
                     }
+                    top = ntop;
                     }
                     budget -= 8;
                 }

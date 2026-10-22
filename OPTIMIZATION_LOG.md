@@ -1238,3 +1238,14 @@ An instrumented campaign (per-thread iteration counters, warp-level analysis, oc
 - With ~13 shared-memory wavefronts/body (state LDS.128 4 + push STS.128 4 + residual store ~4 + jkl LDS 1) that is ~0.9 wavefronts/cycle/SM, i.e. the shared-memory pipe is ~90% busy at 12 warps. The body is already a flat, fully if-converted 25-27 SASS sequence (verified in SASS; no BSSY/BSYNC inside the unrolled loop).
 - Consequence: at 12 warps the kernel is smem-bandwidth-bound; at 9 warps (N=26 r7) it is slightly latency-bound (~2%/warp). Reaching 12 warps at N=26 would need 16 stack levels instead of the actual 21 - impossible without an algorithmic change. **Remaining headroom at N=26-28 is ~5% total** (occupancy + micro-ops).
 - 8x5090 estimates after #71 (~-0.6% byte addressing, unchanged configs): N=26 ~19.1h, N=27 ~8.0-8.3d, N=28 ~87-92d.
+
+## Attempt #72: push store at cslot+0x200, and next-top selected before packing (2026-10-22)
+
+Two equivalent rewrites remove two address/control instructions from the hot body (SASS window between state LDS's: 25 -> 23 instructions).
+
+- **Push store reuses the current slot address.** The pushed child goes to slot `top` = current slot (`top-1`) + one level, so the store address is `(char*)cslot + 512`, an immediate offset from the address already loaded for the state (`STS.128 [R8+0x250]` in SASS). Previously ptxas materialized a second, predicated address IMAD for the push. The current slot pointer `cslot` is also used for the residual store (`cslot+12`), so the body now needs only one address register for the current level.
+- **The next top is selected before packing.** `push = (top != leaf_top) && (child != 0)`; `ntop = push ? top+1 : (exhausted ? retplus : top)`; the old predicated `top++`/`top = nret` pair is replaced by one select chain (SASS: `IADD3 top+1`, `SEL`, `ISETP.NE.AND`, `SEL`), and the leaf/dead count (`solutions += popc(child)`) moves to the else branch. Semantics are identical: the guard body still ends with top=0 (idempotent), and on a push from an exhausted parent the child's ret is still the parent's ret.
+- Registers 54 -> 55; no spills.
+- Measured (interleaved same-session A/B vs #71, single RTX 4090, counts exact at N=20/21/22):
+  N=20 1052.9 -> 1046.8 ms (**-0.6%**), N=21 8213.7 -> 8164.1 ms (**-0.6%**); every round of the interleaved A/B was faster. N=22 74,825 -> 74,565 ms (within noise). The gain is smaller than the earlier +1-instruction calibration (+2.6%), i.e. diminishing returns; at N=26 (9 warps, latency-bound) expect ~1%.
+- 8x5090 estimates after #72 (~-0.6...-1%): N=26 ~19.0h, N=27 ~8.0-8.2d, N=28 ~86-91d.
