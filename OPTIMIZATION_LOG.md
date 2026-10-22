@@ -1260,3 +1260,9 @@ Two equivalent rewrites remove two address/control instructions from the hot bod
   - N=22: symmetric order base/B/B/base 74,777 / 72,961 / 73,205 / 75,221 ms -> **-2.6%** (same-session, non-overlapping pairs).
 - Refuted in the same round: `exhausted = (res_old == p)` (neutral/inconsistent), forcing `left<<1` to SHF via inline `shl.b32` (neutral, 3/4 rounds slower than plain #73), forcing the negation to the ALU via `neg.s32` (+1.3% slower than #73).
 - 8x5090 estimates after #73 (taking ~1.5-2.5% at N=26, between the N=21 and N=22 effects): N=26 ~18.7-18.9h, N=27 ~7.9-8.1d, N=28 ~85-89d.
+
+## Attempt #74 (refuted): forcing the left shift / add / sub onto the ALU pipe (2026-10-22)
+
+- Requested follow-up to #73: force `left = (left|p) << 1` to `SHF` (ALU). Three source forms were tried: inline `shl.b32`, `lt + lt`, and the earlier wrapper variant. **All three produced hot-loop SASS byte-identical to #73** — ptxas canonicalizes `<<1` to `IMAD.SHL.U32` regardless of the source form (the #72-era "variant D" test was therefore invalid: it was the same binary as #73). Inline `add.s32` for `start+top` and `sub.s32` for `residual-p` likewise changed nothing (still `IMAD.IADD`).
+- The only op that can actually be moved off the multiplier pipe is `residual -= p` → `residual ^= p` (equivalent, p is a single set bit), which becomes `LOP3` on the ALU with the same instruction count. Measured: N=21 neutral (8196.5 vs 8195.8 ms, excluding one cold-start outlier), N=22 symmetric order base/X/X/base = 72,450 / 73,162 / 74,335 / 73,130 ms -> **~1.3% slower**. Rejected.
+- Corollary to the sponge lesson: a source rewrite that leaves SASS unchanged cannot change performance; verify the intended instruction changed before spending timing runs on it.
