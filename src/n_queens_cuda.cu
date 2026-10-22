@@ -197,7 +197,7 @@ n_queens_kernel(
 
                     unsigned int cur = cur0 | p;
                     left = (left | p) << 1;
-                    right = __umulhi(right | p, 0x80000000u);   // == (right|p)>>1，走 FMA 管
+                    right = (right | p) >> 1;   // == umulhi(x,0x80000000)，SHF 走 ALU 管（乘法管更紧，见 #73）
 
                     unsigned int occ, child;
                     asm("lop3.b32 %0, %1, %2, %3, 0xfe;" : "=r"(occ) : "r"(cur), "r"(left), "r"(right));
@@ -247,7 +247,7 @@ n_queens_kernel(
 
                     unsigned int cur = cur0 | p;
                     left = (left | p) << 1;
-                    right = __umulhi(right | p, 0x80000000u);   // == (right|p)>>1，走 FMA 管
+                    right = (right | p) >> 1;   // == umulhi(x,0x80000000)，SHF 走 ALU 管（乘法管更紧，见 #73）
 
                     unsigned int occ, child;
                     asm("lop3.b32 %0, %1, %2, %3, 0xfe;" : "=r"(occ) : "r"(cur), "r"(left), "r"(right));
@@ -297,7 +297,7 @@ n_queens_kernel(
 
                     unsigned int cur = cur0 | p;
                     left = (left | p) << 1;
-                    right = __umulhi(right | p, 0x80000000u);   // == (right|p)>>1，走 FMA 管
+                    right = (right | p) >> 1;   // == umulhi(x,0x80000000)，SHF 走 ALU 管（乘法管更紧，见 #73）
 
                     unsigned int occ, child;
                     asm("lop3.b32 %0, %1, %2, %3, 0xfe;" : "=r"(occ) : "r"(cur), "r"(left), "r"(right));
@@ -347,7 +347,7 @@ n_queens_kernel(
 
                     unsigned int cur = cur0 | p;
                     left = (left | p) << 1;
-                    right = __umulhi(right | p, 0x80000000u);   // == (right|p)>>1，走 FMA 管
+                    right = (right | p) >> 1;   // == umulhi(x,0x80000000)，SHF 走 ALU 管（乘法管更紧，见 #73）
 
                     unsigned int occ, child;
                     asm("lop3.b32 %0, %1, %2, %3, 0xfe;" : "=r"(occ) : "r"(cur), "r"(left), "r"(right));
@@ -397,7 +397,7 @@ n_queens_kernel(
 
                     unsigned int cur = cur0 | p;
                     left = (left | p) << 1;
-                    right = __umulhi(right | p, 0x80000000u);   // == (right|p)>>1，走 FMA 管
+                    right = (right | p) >> 1;   // == umulhi(x,0x80000000)，SHF 走 ALU 管（乘法管更紧，见 #73）
 
                     unsigned int occ, child;
                     asm("lop3.b32 %0, %1, %2, %3, 0xfe;" : "=r"(occ) : "r"(cur), "r"(left), "r"(right));
@@ -447,7 +447,7 @@ n_queens_kernel(
 
                     unsigned int cur = cur0 | p;
                     left = (left | p) << 1;
-                    right = __umulhi(right | p, 0x80000000u);   // == (right|p)>>1，走 FMA 管
+                    right = (right | p) >> 1;   // == umulhi(x,0x80000000)，SHF 走 ALU 管（乘法管更紧，见 #73）
 
                     unsigned int occ, child;
                     asm("lop3.b32 %0, %1, %2, %3, 0xfe;" : "=r"(occ) : "r"(cur), "r"(left), "r"(right));
@@ -497,7 +497,7 @@ n_queens_kernel(
 
                     unsigned int cur = cur0 | p;
                     left = (left | p) << 1;
-                    right = __umulhi(right | p, 0x80000000u);   // == (right|p)>>1，走 FMA 管
+                    right = (right | p) >> 1;   // == umulhi(x,0x80000000)，SHF 走 ALU 管（乘法管更紧，见 #73）
 
                     unsigned int occ, child;
                     asm("lop3.b32 %0, %1, %2, %3, 0xfe;" : "=r"(occ) : "r"(cur), "r"(left), "r"(right));
@@ -547,7 +547,7 @@ n_queens_kernel(
 
                     unsigned int cur = cur0 | p;
                     left = (left | p) << 1;
-                    right = __umulhi(right | p, 0x80000000u);   // == (right|p)>>1，走 FMA 管
+                    right = (right | p) >> 1;   // == umulhi(x,0x80000000)，SHF 走 ALU 管（乘法管更紧，见 #73）
 
                     unsigned int occ, child;
                     asm("lop3.b32 %0, %1, %2, %3, 0xfe;" : "=r"(occ) : "r"(cur), "r"(left), "r"(right));

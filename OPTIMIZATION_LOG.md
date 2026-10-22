@@ -1249,3 +1249,14 @@ Two equivalent rewrites remove two address/control instructions from the hot bod
 - Measured (interleaved same-session A/B vs #71, single RTX 4090, counts exact at N=20/21/22):
   N=20 1052.9 -> 1046.8 ms (**-0.6%**), N=21 8213.7 -> 8164.1 ms (**-0.6%**); every round of the interleaved A/B was faster. N=22 74,825 -> 74,565 ms (within noise). The gain is smaller than the earlier +1-instruction calibration (+2.6%), i.e. diminishing returns; at N=26 (9 warps, latency-bound) expect ~1%.
 - 8x5090 estimates after #72 (~-0.6...-1%): N=26 ~19.0h, N=27 ~8.0-8.2d, N=28 ~86-91d.
+
+## Attempt #73: revert the #59 __umulhi trick, the right diagonal shift goes back to SHF (2026-10-22)
+
+- The right-diagonal update is again `right = (right | p) >> 1` (SASS `SHF.R.U32.HI`), replacing `__umulhi(right|p, 0x80000000u)` (SASS `IMAD.HI.U32`). The two are mathematically identical (`umulhi(x, 2^31) == x >> 1` for unsigned x); only the executing pipe changes. Instruction count unchanged (23/body), registers 55, no spills.
+- **Why the old trick now loses:** #59 deliberately moved this shift onto the FMA/multiplier pipe to relieve the ALU pipe. After #67-#72 the body's mix changed (the predicated push-address IMAD disappeared, the top update became a select chain), and the multiplier/IMAD pipe became the scarcer resource; `IMAD.HI` also has a higher throughput cost than `SHF`. Re-validating an old micro-optimization after the surrounding code changes is exactly the "sponge" lesson.
+- Measured (counts exact at N=20/21/22):
+  - N=20: 1041.9 -> 1035.4 ms interleaved (**-0.6%**, 3/4 rounds);
+  - N=21: 8138.9 -> 8066.2 ms interleaved (**-0.9%**, both B rounds below both base rounds);
+  - N=22: symmetric order base/B/B/base 74,777 / 72,961 / 73,205 / 75,221 ms -> **-2.6%** (same-session, non-overlapping pairs).
+- Refuted in the same round: `exhausted = (res_old == p)` (neutral/inconsistent), forcing `left<<1` to SHF via inline `shl.b32` (neutral, 3/4 rounds slower than plain #73), forcing the negation to the ALU via `neg.s32` (+1.3% slower than #73).
+- 8x5090 estimates after #73 (taking ~1.5-2.5% at N=26, between the N=21 and N=22 effects): N=26 ~18.7-18.9h, N=27 ~7.9-8.1d, N=28 ~85-89d.
