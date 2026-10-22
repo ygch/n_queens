@@ -1216,3 +1216,25 @@ An instrumented campaign (per-thread iteration counters, warp-level analysis, oc
 - Counts exact at N=6..20 (presets 4..7).
 - Measured (single RTX 4090, uncontended): N=20 r7 1093 -> 1055 ms (**-3.5%**), N=21 9.49 -> 8.80 s (**-7.2%**), N=22 82.9 -> 76.0 s (**-8.3%**); unroll x16 is 0.5% worse than x8 at N=21/22, so x8 is the sweet spot. The gain grows with N (the larger-N runs are more latency-bound at lower occupancy).
 - Revised 8x5090 estimates (conservative -8% on the post-#69 numbers): N=26 ~21.3-23.8h, N=27 ~10.0-11.3d, N=28 ~104-118d.
+
+## Attempt #71: byte-offset stack addressing + real-occupancy block for N=21 r7 (2026-10-22)
+
+**1. Byte-offset hot-loop addressing (reload kernel)**
+- The hot body now addresses the stack as `sp + top*512` bytes (`sp = (char*)stk + sbase*16`) instead of `stk[sbase + top*32]` int4 elements. The state LDS keeps its element offset in a register and uses the scaled address mode `[R.X16 + 0x50]`, so the load-address dependency chain is 1 IMAD instead of 2 (the second IMAD was only needed to materialize the byte address for the `STS.128` push, which cannot use the scaled mode; ptxas emits 1 LEA for it). Registers 56 -> 54 (occupancy unchanged).
+- Measured vs the #70 kernel: N=20 r7 neutral (1035 vs 1030 ms), N=21 r7 **-2.0%** (8498 vs 8670 ms), N=22 r7 **-0.6%** (74,784 vs 75,218 ms); counts exact.
+- Variant with an explicit `top*512` byte expression for all four accesses: same times (N=21 -0.75%, N=22 -0.58%) but 2 more SASS/body; kept the element-offset form.
+
+**2. Block table: N=21 r7 -> 128**
+- N=21 r7 has 16 levels/warp (8192B): b=32 gives 10 blocks = 10 warps, but b=128 (32,768B) fits 3 blocks = **12 warps** (cudaOccupancy measured) because the fixed per-block smem overhead is amortized over 4 warps. Measured 8229 -> 8099 ms (**-4.2...-5.7%** vs b=32's 8593-8768 ms). r6 is 17 levels -> b=128 gives only 8 warps, so the rule is conditional on preset>=7.
+
+**3. Refuted this round (measured at N=20/21/22)**
+- Whole-16B-slot residual write-back (4 registers already live, conflict-free STS.128): **+2.6% slower** (1058 vs 1031 ms at N=20). The 4B `.w` store is not the bottleneck; shared-memory bandwidth is not the limit at 9-12 warps.
+- Group-level 32-bit solution accumulator (one 64-bit add per unroll group): neutral (1035 vs 1031 ms). ptxas already batches the eight 64-bit adds at the group end and they overlap.
+- `residual ^= p` (== subtract for a single set bit) hoping for a fused LOP3-with-predicate zero test: ptxas keeps a separate ISETP; same instruction count, neutral.
+- Deeper leaf collapse (3 rows) and register-carry variants re-analysed and rejected: any nested loop or per-lane conditional path is executed by the whole warp whenever one lane takes it (SIMT), which is why the flat reload loop wins.
+
+**4. Bottleneck calibration (instrumented body count)**
+- Added `atomicAdd(g_bodies, slice - budget)` per task (instrumented build only): N=20 r7 executes **727.9G lane-bodies** in 1.035 s on a 4090 = 0.069 warp-bodies/cycle/SM at 12 warps.
+- With ~13 shared-memory wavefronts/body (state LDS.128 4 + push STS.128 4 + residual store ~4 + jkl LDS 1) that is ~0.9 wavefronts/cycle/SM, i.e. the shared-memory pipe is ~90% busy at 12 warps. The body is already a flat, fully if-converted 25-27 SASS sequence (verified in SASS; no BSSY/BSYNC inside the unrolled loop).
+- Consequence: at 12 warps the kernel is smem-bandwidth-bound; at 9 warps (N=26 r7) it is slightly latency-bound (~2%/warp). Reaching 12 warps at N=26 would need 16 stack levels instead of the actual 21 - impossible without an algorithmic change. **Remaining headroom at N=26-28 is ~5% total** (occupancy + micro-ops).
+- 8x5090 estimates after #71 (~-0.6% byte addressing, unchanged configs): N=26 ~19.1h, N=27 ~8.0-8.3d, N=28 ~87-92d.

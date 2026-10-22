@@ -165,6 +165,7 @@ n_queens_kernel(
                 // 深度索引栈：槽位=深度 ⇒ 行号 = start+top，只依赖 top（两次 LDS 可并行发射）。
                 // 压缩弹栈用“死祖先计数” skip 替代：压子时 skip'=耗尽?1+skip:0，弹栈 top-=1+skip。
                 const int leaf_top = N - start - 2;
+                char *sp = (char *)stk + (size_t)sbase * 16;   // 本 lane 槽 0 的字节地址
                 stk[sbase - 32] = make_int4((int)col, (int)last, (int)last, 0);  // 保护槽
                 int budget = slice;
 
@@ -173,7 +174,7 @@ n_queens_kernel(
                 // 提前结束的 lane 在保护层上空转到组末，无需任何中途 top 检查。
                 while (top > 0 && budget > 0) {
                     {
-                    int4 e = stk[sbase + (top - 1) * 32];
+                    int4 e = *reinterpret_cast<int4 *>(sp + top * 512 - 512);
                     unsigned int cur0 = (unsigned int)e.x & last;   // 去掉 ret 位
                     unsigned int right = (unsigned int)e.z;
                     unsigned int retplus;   // 本层弹栈后 top 应变成的值（“返回槽”）
@@ -190,7 +191,7 @@ n_queens_kernel(
 
                     unsigned int p = residual & (0u - residual);   // 最低可用位
                     residual -= p;
-                    stk[sbase + (top - 1) * 32].w = (int)residual; // 存回残余候选
+                    *(int *)(sp + top * 512 - 500) = (int)residual; // 存回残余候选
                     const bool exhausted = (residual == 0);
 
                     unsigned int cur = cur0 | p;
@@ -215,12 +216,12 @@ n_queens_kernel(
                             ncur = cur | ((nret & 15u) << N);
                             nright = right | ((nret >> 4) << N);
                         }
-                        stk[sbase + top * 32] = make_int4((int)ncur, (int)left, (int)nright, (int)child);
+                        *reinterpret_cast<int4 *>(sp + top * 512) = make_int4((int)ncur, (int)left, (int)nright, (int)child);
                         top++;
                     }
                     }
                     {
-                    int4 e = stk[sbase + (top - 1) * 32];
+                    int4 e = *reinterpret_cast<int4 *>(sp + top * 512 - 512);
                     unsigned int cur0 = (unsigned int)e.x & last;   // 去掉 ret 位
                     unsigned int right = (unsigned int)e.z;
                     unsigned int retplus;   // 本层弹栈后 top 应变成的值（“返回槽”）
@@ -237,7 +238,7 @@ n_queens_kernel(
 
                     unsigned int p = residual & (0u - residual);   // 最低可用位
                     residual -= p;
-                    stk[sbase + (top - 1) * 32].w = (int)residual; // 存回残余候选
+                    *(int *)(sp + top * 512 - 500) = (int)residual; // 存回残余候选
                     const bool exhausted = (residual == 0);
 
                     unsigned int cur = cur0 | p;
@@ -262,12 +263,12 @@ n_queens_kernel(
                             ncur = cur | ((nret & 15u) << N);
                             nright = right | ((nret >> 4) << N);
                         }
-                        stk[sbase + top * 32] = make_int4((int)ncur, (int)left, (int)nright, (int)child);
+                        *reinterpret_cast<int4 *>(sp + top * 512) = make_int4((int)ncur, (int)left, (int)nright, (int)child);
                         top++;
                     }
                     }
                     {
-                    int4 e = stk[sbase + (top - 1) * 32];
+                    int4 e = *reinterpret_cast<int4 *>(sp + top * 512 - 512);
                     unsigned int cur0 = (unsigned int)e.x & last;   // 去掉 ret 位
                     unsigned int right = (unsigned int)e.z;
                     unsigned int retplus;   // 本层弹栈后 top 应变成的值（“返回槽”）
@@ -284,7 +285,7 @@ n_queens_kernel(
 
                     unsigned int p = residual & (0u - residual);   // 最低可用位
                     residual -= p;
-                    stk[sbase + (top - 1) * 32].w = (int)residual; // 存回残余候选
+                    *(int *)(sp + top * 512 - 500) = (int)residual; // 存回残余候选
                     const bool exhausted = (residual == 0);
 
                     unsigned int cur = cur0 | p;
@@ -309,12 +310,12 @@ n_queens_kernel(
                             ncur = cur | ((nret & 15u) << N);
                             nright = right | ((nret >> 4) << N);
                         }
-                        stk[sbase + top * 32] = make_int4((int)ncur, (int)left, (int)nright, (int)child);
+                        *reinterpret_cast<int4 *>(sp + top * 512) = make_int4((int)ncur, (int)left, (int)nright, (int)child);
                         top++;
                     }
                     }
                     {
-                    int4 e = stk[sbase + (top - 1) * 32];
+                    int4 e = *reinterpret_cast<int4 *>(sp + top * 512 - 512);
                     unsigned int cur0 = (unsigned int)e.x & last;   // 去掉 ret 位
                     unsigned int right = (unsigned int)e.z;
                     unsigned int retplus;   // 本层弹栈后 top 应变成的值（“返回槽”）
@@ -331,7 +332,7 @@ n_queens_kernel(
 
                     unsigned int p = residual & (0u - residual);   // 最低可用位
                     residual -= p;
-                    stk[sbase + (top - 1) * 32].w = (int)residual; // 存回残余候选
+                    *(int *)(sp + top * 512 - 500) = (int)residual; // 存回残余候选
                     const bool exhausted = (residual == 0);
 
                     unsigned int cur = cur0 | p;
@@ -356,12 +357,12 @@ n_queens_kernel(
                             ncur = cur | ((nret & 15u) << N);
                             nright = right | ((nret >> 4) << N);
                         }
-                        stk[sbase + top * 32] = make_int4((int)ncur, (int)left, (int)nright, (int)child);
+                        *reinterpret_cast<int4 *>(sp + top * 512) = make_int4((int)ncur, (int)left, (int)nright, (int)child);
                         top++;
                     }
                     }
                     {
-                    int4 e = stk[sbase + (top - 1) * 32];
+                    int4 e = *reinterpret_cast<int4 *>(sp + top * 512 - 512);
                     unsigned int cur0 = (unsigned int)e.x & last;   // 去掉 ret 位
                     unsigned int right = (unsigned int)e.z;
                     unsigned int retplus;   // 本层弹栈后 top 应变成的值（“返回槽”）
@@ -378,7 +379,7 @@ n_queens_kernel(
 
                     unsigned int p = residual & (0u - residual);   // 最低可用位
                     residual -= p;
-                    stk[sbase + (top - 1) * 32].w = (int)residual; // 存回残余候选
+                    *(int *)(sp + top * 512 - 500) = (int)residual; // 存回残余候选
                     const bool exhausted = (residual == 0);
 
                     unsigned int cur = cur0 | p;
@@ -403,12 +404,12 @@ n_queens_kernel(
                             ncur = cur | ((nret & 15u) << N);
                             nright = right | ((nret >> 4) << N);
                         }
-                        stk[sbase + top * 32] = make_int4((int)ncur, (int)left, (int)nright, (int)child);
+                        *reinterpret_cast<int4 *>(sp + top * 512) = make_int4((int)ncur, (int)left, (int)nright, (int)child);
                         top++;
                     }
                     }
                     {
-                    int4 e = stk[sbase + (top - 1) * 32];
+                    int4 e = *reinterpret_cast<int4 *>(sp + top * 512 - 512);
                     unsigned int cur0 = (unsigned int)e.x & last;   // 去掉 ret 位
                     unsigned int right = (unsigned int)e.z;
                     unsigned int retplus;   // 本层弹栈后 top 应变成的值（“返回槽”）
@@ -425,7 +426,7 @@ n_queens_kernel(
 
                     unsigned int p = residual & (0u - residual);   // 最低可用位
                     residual -= p;
-                    stk[sbase + (top - 1) * 32].w = (int)residual; // 存回残余候选
+                    *(int *)(sp + top * 512 - 500) = (int)residual; // 存回残余候选
                     const bool exhausted = (residual == 0);
 
                     unsigned int cur = cur0 | p;
@@ -450,12 +451,12 @@ n_queens_kernel(
                             ncur = cur | ((nret & 15u) << N);
                             nright = right | ((nret >> 4) << N);
                         }
-                        stk[sbase + top * 32] = make_int4((int)ncur, (int)left, (int)nright, (int)child);
+                        *reinterpret_cast<int4 *>(sp + top * 512) = make_int4((int)ncur, (int)left, (int)nright, (int)child);
                         top++;
                     }
                     }
                     {
-                    int4 e = stk[sbase + (top - 1) * 32];
+                    int4 e = *reinterpret_cast<int4 *>(sp + top * 512 - 512);
                     unsigned int cur0 = (unsigned int)e.x & last;   // 去掉 ret 位
                     unsigned int right = (unsigned int)e.z;
                     unsigned int retplus;   // 本层弹栈后 top 应变成的值（“返回槽”）
@@ -472,7 +473,7 @@ n_queens_kernel(
 
                     unsigned int p = residual & (0u - residual);   // 最低可用位
                     residual -= p;
-                    stk[sbase + (top - 1) * 32].w = (int)residual; // 存回残余候选
+                    *(int *)(sp + top * 512 - 500) = (int)residual; // 存回残余候选
                     const bool exhausted = (residual == 0);
 
                     unsigned int cur = cur0 | p;
@@ -497,12 +498,12 @@ n_queens_kernel(
                             ncur = cur | ((nret & 15u) << N);
                             nright = right | ((nret >> 4) << N);
                         }
-                        stk[sbase + top * 32] = make_int4((int)ncur, (int)left, (int)nright, (int)child);
+                        *reinterpret_cast<int4 *>(sp + top * 512) = make_int4((int)ncur, (int)left, (int)nright, (int)child);
                         top++;
                     }
                     }
                     {
-                    int4 e = stk[sbase + (top - 1) * 32];
+                    int4 e = *reinterpret_cast<int4 *>(sp + top * 512 - 512);
                     unsigned int cur0 = (unsigned int)e.x & last;   // 去掉 ret 位
                     unsigned int right = (unsigned int)e.z;
                     unsigned int retplus;   // 本层弹栈后 top 应变成的值（“返回槽”）
@@ -519,7 +520,7 @@ n_queens_kernel(
 
                     unsigned int p = residual & (0u - residual);   // 最低可用位
                     residual -= p;
-                    stk[sbase + (top - 1) * 32].w = (int)residual; // 存回残余候选
+                    *(int *)(sp + top * 512 - 500) = (int)residual; // 存回残余候选
                     const bool exhausted = (residual == 0);
 
                     unsigned int cur = cur0 | p;
@@ -544,7 +545,7 @@ n_queens_kernel(
                             ncur = cur | ((nret & 15u) << N);
                             nright = right | ((nret >> 4) << N);
                         }
-                        stk[sbase + top * 32] = make_int4((int)ncur, (int)left, (int)nright, (int)child);
+                        *reinterpret_cast<int4 *>(sp + top * 512) = make_int4((int)ncur, (int)left, (int)nright, (int)child);
                         top++;
                     }
                     }
@@ -778,6 +779,10 @@ long long cuda_solve(int n, int preset_queens) {
     else if (n == 21 || n >= 23)
         block_size = 32;         // N=21 实测 12.46s vs 64 的 12.81s
                                 // 例外 N=22（走默认 64）：实测 108.3s vs b=32 的 116.2s
+    // N=21 r7（16 层）：b=32 只驻留 10 块 = 10 warps；b=128 的 32,768B 可驻留 3 块 × 4 = 12 warps
+    // （cudaOccupancy 实测）。实测 8229ms vs 8593ms（−4.2%）。r6 是 17 层，b=128 只剩 8 warps，仍用 b=32。
+    if (n == 21 && preset_queens >= 7)
+        block_size = 128;
     // N=23：r7（18 层）b=32 只有 9 块/SM；b=64（2 warps/块）→ 10 块 = 10 warps。
     // 实测（8×5090，K=16/16384）：窗口 96.6s → 89.8s（−7.0%），计数正确。r6 仍是 b=32 最优。
     if (n == 23 && preset_queens >= 7)
