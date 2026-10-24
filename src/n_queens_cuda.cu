@@ -29,6 +29,9 @@
 #include <cuda_runtime.h>
 #include <omp.h>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <string>
 #include <algorithm>
 #include <cstdint>
 #include <vector>
@@ -607,8 +610,15 @@ n_queens_kernel(
 
 // 按jkl排序星座：相同jkl的星座分到同一block，共享jkl_queens共享内存
 static void sortByJkl(std::vector<Constellation> &consts) {
+    // Total order (jkl, then every remaining field) so that block numbering is
+    // identical across machines/builds; blk % parts is the distribution key.
     std::sort(consts.begin(), consts.end(), [](const Constellation &a, const Constellation &b) {
-        return getJkl(a.start_ijkl) < getJkl(b.start_ijkl);
+        unsigned ka = getJkl(a.start_ijkl), kb = getJkl(b.start_ijkl);
+        if (ka != kb) return ka < kb;
+        if (a.start_ijkl != b.start_ijkl) return a.start_ijkl < b.start_ijkl;
+        if (a.ld != b.ld) return (unsigned)a.ld < (unsigned)b.ld;
+        if (a.rd != b.rd) return (unsigned)a.rd < (unsigned)b.rd;
+        return (unsigned)a.col < (unsigned)b.col;
     });
 }
 
@@ -770,6 +780,19 @@ static long long solve_multi_gpu(int n, int gpu_num, int block_size, int K, int 
     return sum;
 }
 
+// Write one chunk's weighted partial sum atomically (for resumable campaigns).
+static void write_chunk_out(long long sum) {
+    const char *out = getenv("NQ_CHUNK_OUT");
+    if (!out || !*out) return;
+    std::string tmp = std::string(out) + ".tmp";
+    FILE *f = fopen(tmp.c_str(), "w");
+    if (f) {
+        fprintf(f, "%lld\n", sum);
+        fclose(f);
+        rename(tmp.c_str(), out);
+    }
+}
+
 // =============================================================================
 // cuda_solve — 主入口函数
 //
@@ -883,12 +906,65 @@ long long cuda_solve(int n, int preset_queens) {
         jkl_queens_arr[blk * n + l] = ~1u;
     }
 
+    // ---- Optional work split: interleaved parts x sub-chunks ----
+    // NQ_PARTS/NQ_PART select blocks with blk % parts == part (balances jkl
+    // groups); NQ_CHUNKS/NQ_CHUNK split that part's block list into contiguous
+    // sub-chunks. Defaults (1/0, 1/0) leave the production behaviour unchanged.
+    int parts = 1, part = 0, chunks = 1, chunk = 0;
+    { const char *e = getenv("NQ_PARTS");  if (e) parts  = atoi(e); }
+    { const char *e = getenv("NQ_PART");   if (e) part   = atoi(e); }
+    { const char *e = getenv("NQ_CHUNKS"); if (e) chunks = atoi(e); }
+    { const char *e = getenv("NQ_CHUNK");  if (e) chunk  = atoi(e); }
+    if (parts < 1) parts = 1;
+    if (chunks < 1) chunks = 1;
+    if (part < 0 || part >= parts || chunk < 0 || chunk >= chunks) {
+        print_with_time("invalid NQ_PART/NQ_CHUNK: part %d/%d chunk %d/%d\n",
+                        part, parts, chunk, chunks);
+        return -1;
+    }
+    std::vector<Constellation> sel_consts;
+    std::vector<uint32_t> sel_jkl;
+    const std::vector<Constellation> *work_consts = &constellations;
+    const std::vector<uint32_t> *work_jkl = &jkl_queens_arr;
+    if (parts > 1 || chunks > 1) {
+        std::vector<int> part_blocks;
+        part_blocks.reserve((size_t)num_blocks / parts + 1);
+        for (int blk = 0; blk < num_blocks; blk++)
+            if (blk % parts == part) part_blocks.push_back(blk);
+        const int nb_part = (int)part_blocks.size();
+        int cstart = (int)((long long)chunk * nb_part / chunks);
+        int cend   = (int)((long long)(chunk + 1) * nb_part / chunks);
+        if (cstart > nb_part) cstart = nb_part;
+        if (cend > nb_part) cend = nb_part;
+        const int nb_sel = cend - cstart;
+        if (nb_sel <= 0) {
+            print_with_time("part %d/%d chunk %d/%d: empty\n", part, parts, chunk, chunks);
+            return 0;
+        }
+        const int per_block = block_size * K;
+        sel_consts.reserve((size_t)nb_sel * per_block);
+        sel_jkl.resize((size_t)nb_sel * n);
+        for (int s2 = 0; s2 < nb_sel; s2++) {
+            const int blk = part_blocks[cstart + s2];
+            const Constellation *src = &constellations[(long long)blk * per_block];
+            sel_consts.insert(sel_consts.end(), src, src + per_block);
+            memcpy(&sel_jkl[(size_t)s2 * n], &jkl_queens_arr[(size_t)blk * n],
+                   (size_t)n * sizeof(uint32_t));
+        }
+        cnt = (long long)nb_sel * per_block;
+        num_blocks = nb_sel;
+        work_consts = &sel_consts;
+        work_jkl = &sel_jkl;
+        print_with_time("work split: part %d/%d chunk %d/%d -> %d blocks, %lld constellations\n",
+                        part, parts, chunk, chunks, num_blocks, cnt);
+    }
+
     // Step 3.6: 回载内核的精确栈深。
     // 内核在 row==N-3 的叶子层只计数、不压栈，因此最大 top = (N-2)-start（不是 +1）。
     // 槽数按此精确分配；每省 1 层 = 每 warp 少 512B smem（可能多一个驻留块）。
     int maxd = 1;   // 槽数
     for (long long i = 0; i < cnt; i++) {
-        int s = constellations[i].start_ijkl >> 20;
+        int s = (*work_consts)[i].start_ijkl >> 20;
         if (s == 69 || s >= n - 2)
             continue;
         int d = (n - 2) - s;          // 叶子层不压栈，真实最大 top
@@ -901,15 +977,18 @@ long long cuda_solve(int n, int preset_queens) {
     // Step 4: 转换为GPU端紧凑格式
     std::vector<Constellation4> const_data(cnt);
     for (long long i = 0; i < cnt; i++) {
-        const_data[i] = {constellations[i].ld, constellations[i].rd,
-                         constellations[i].col, constellations[i].start_ijkl};
+        const_data[i] = {(*work_consts)[i].ld, (*work_consts)[i].rd,
+                         (*work_consts)[i].col, (*work_consts)[i].start_ijkl};
     }
 
     // 多卡：block 粒度 mod 交错分配（blk 归卡 blk % gpu_num）
     int gpu_num = 0;
     cudaGetDeviceCount(&gpu_num);
-    if (gpu_num > 1)
-        return solve_multi_gpu(n, gpu_num, block_size, K, num_blocks, maxd, const_data, jkl_queens_arr);
+    if (gpu_num > 1) {
+        long long sum = solve_multi_gpu(n, gpu_num, block_size, K, num_blocks, maxd, const_data, *work_jkl);
+        write_chunk_out(sum);
+        return sum;
+    }
 
     // Step 5: 分配GPU内存并传输数据
     Constellation4 *d_const;
@@ -920,7 +999,7 @@ long long cuda_solve(int n, int preset_queens) {
     cudaMalloc(&d_results, cnt * sizeof(long long));
 
     cudaMemcpy(d_const, const_data.data(), cnt * sizeof(Constellation4), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_jkl, jkl_queens_arr.data(), num_blocks * n * sizeof(unsigned int), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_jkl, work_jkl->data(), num_blocks * n * sizeof(unsigned int), cudaMemcpyHostToDevice);
     cudaMemset(d_results, 0, cnt * sizeof(long long));
 
     // 细粒度任务平衡（#56）：每星座栈检查点 + 每 block 任务队列
@@ -979,7 +1058,7 @@ long long cuda_solve(int n, int preset_queens) {
             FILE *g = fopen(gp, "wb");
             if (g) {
                 for (long long i = 0; i < cnt; i++) {
-                    int v = constellations[i].start_ijkl;
+                    int v = (*work_consts)[i].start_ijkl;
                     fwrite(&v, sizeof(int), 1, g);
                 }
                 fclose(g);
@@ -1000,11 +1079,11 @@ long long cuda_solve(int n, int preset_queens) {
     // symmetry()返回8（一般情况）/4（180度对称）/2（90度对称）
     long long sum = 0;
     for (long long i = 0; i < cnt; i++) {
-        if (constellations[i].start_ijkl >> 20 == 69)
+        if ((*work_consts)[i].start_ijkl >> 20 == 69)
             continue;  // 跳过伪星座
-        int ijkl = constellations[i].start_ijkl & 0xFFFFF;
+        int ijkl = (*work_consts)[i].start_ijkl & 0xFFFFF;
         sum += results[i] * symmetry(n, ijkl);
     }
-
+    write_chunk_out(sum);
     return sum;
 }

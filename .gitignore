@@ -1,0 +1,7 @@
+# Build artifacts.
+/src/n_queens
+
+# Distributed-run artifacts (partial sums must never enter git).
+/distribute/*.done
+/distribute/*.tmp
+/distribute/logs/
