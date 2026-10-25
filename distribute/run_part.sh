@@ -26,8 +26,14 @@ while [ "$c" -lt "$CHUNKS" ]; do
     out=$DIR/n${N}_r${PRESET}_part${PART}_chunk${c}.done
     log=$LOG/n${N}_r${PRESET}_part${PART}_chunk${c}.log
     if [ -s "$out" ]; then
-        echo "[$(date '+%F %T')] skip chunk $c (done: $(cat "$out"))"
-        c=$((c+1)); continue
+        val=$(cat "$out")
+        if [ "$val" = "0" ]; then
+            echo "[$(date '+%F %T')] chunk $c has a stale zero .done (failed run); rerunning"
+            rm -f "$out"
+        else
+            echo "[$(date '+%F %T')] skip chunk $c (done: $val)"
+            c=$((c+1)); continue
+        fi
     fi
     echo "[$(date '+%F %T')] part $PART chunk $c start -> $log"
     NQ_PARTS=$PARTS NQ_PART=$PART NQ_CHUNKS=$CHUNKS NQ_CHUNK=$c \
@@ -37,7 +43,13 @@ while [ "$c" -lt "$CHUNKS" ]; do
         echo "[$(date '+%F %T')] part $PART chunk $c FAILED rc=$rc; see $log" >&2
         exit 1
     fi
-    echo "[$(date '+%F %T')] part $PART chunk $c done: $(cat "$out")"
+    val=$(cat "$out")
+    if [ "$val" = "0" ]; then
+        echo "[$(date '+%F %T')] part $PART chunk $c FAILED: zero partial sum; see $log" >&2
+        rm -f "$out"
+        exit 1
+    fi
+    echo "[$(date '+%F %T')] part $PART chunk $c done: $val"
     c=$((c+1))
 done
 echo "part $PART complete."

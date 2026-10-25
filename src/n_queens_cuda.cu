@@ -76,7 +76,7 @@ n_queens_kernel(
     int4 * __restrict__ ckpt,                             // [星座槽 * S] 栈检查点
     int * __restrict__ ckpt_top,                          // 每任务已保存层数（0 = 未开始）
     long long * __restrict__ ckpt_sol,                    // 每任务已累计解数
-    int * __restrict__ queue)                             // 每block：2*cap 环 + 3 计数器
+    int * __restrict__ queue)                             // 每block：2*cap 环 + 3 个 64 位计数器
 {
     const int lid = threadIdx.x;
     const int nb = blockDim.x;
@@ -100,10 +100,12 @@ n_queens_kernel(
     const int sbase = (lid >> 5) * ((S + 1) * 32) + 32 + (lid & 31);
 
     // --- 每 block 一个任务队列（全局内存）：[0, 2*cap) 环形缓冲 + qhead/qtail/qpop ---
-    int *q = queue + (size_t)blockIdx.x * (2 * cap + 4);
-    int *qhead = q + 2 * cap;
-    int *qtail = qhead + 1;
-    int *qpop  = qhead + 2;
+    // 计数器必须是 64 位：N=28 单块迭代量可达 1e13+，每 slice 回队一次，32 位
+    // qtail 数小时后回绕，pos 变负会读写环外地址（2026-10-25 part1/2 chunk0 事故）。
+    int *q = queue + (size_t)blockIdx.x * (2 * cap + 8);
+    unsigned long long *qhead = reinterpret_cast<unsigned long long *>(q + 2 * cap);
+    unsigned long long *qtail = qhead + 1;
+    unsigned long long *qpop  = qhead + 2;
 
     if (lid == 0) { *qhead = 0; *qtail = 0; *qpop = 0; }
     __syncthreads();
@@ -114,18 +116,20 @@ n_queens_kernel(
         if (constellations[gid].start_ijkl >> 20 == 69)
             results[gid] = 0;
         else
-            q[atomicAdd(qtail, 1)] = gid;
+            q[(size_t)atomicAdd(qtail, 1)] = gid;
     }
 
     // --- 主循环：每轮领一个任务、跑 slice 次迭代；未完成则检查点后回队 ---
     // lane 在任务边界被 warp 重新同步，但每轮工作量被预算截成等长 ⇒ warp 内不再等最慢子树
     for (;;) {
         __syncthreads();                       // (A) 上一轮的入队/账目可见
-        const int cnt = *qtail - *qhead;       // 本轮可领任务数（稳定）
+        const int cnt = (int)(*qtail - *qhead);   // 本轮可领任务数（稳定）
         if (cnt == 0)
             break;                             // 池空 ⇒ 全体一起退出
-        const int take = atomicAdd(qpop, 1);
-        const int task = (take < cnt) ? q[(*qhead + take) % (2 * cap)] : -1;
+        const unsigned long long take = atomicAdd(qpop, 1);
+        const int task = (take < (unsigned long long)cnt)
+                             ? q[(size_t)((*qhead + take) % (unsigned long long)(2 * cap))]
+                             : -1;
 
         bool finished = false;
         if (task >= 0) {
@@ -593,11 +597,12 @@ n_queens_kernel(
 
         __syncthreads();                       // (B) 所有领取/时间片结束；qhead 更新互斥
         if (task >= 0 && !finished) {
-            int pos = atomicAdd(qtail, 1);
-            q[pos % (2 * cap)] = task;         // 未完成任务回队
+            const unsigned long long pos = atomicAdd(qtail, 1);
+            q[(size_t)(pos % (unsigned long long)(2 * cap))] = task;   // 未完成任务回队
         }
         if (lid == 0) {
-            const int used = (*qpop < cnt) ? *qpop : cnt;
+            const unsigned long long used =
+                (*qpop < (unsigned long long)cnt) ? *qpop : (unsigned long long)cnt;
             *qhead += used;
             *qpop = 0;
         }
@@ -661,6 +666,7 @@ static void padWithPseudo(std::vector<Constellation> &consts, int n, int blockSi
         } \
         KERNEL<n_val><<<num_blocks, block_size, SMEM>>>(d_const, d_jkl, maxd, d_results, K, \
                                                        slice, d_ckpt, d_ctop, d_csol, d_queue); \
+        launch_err = cudaGetLastError();   /* 启动配置错误不会让 sync 报错 */ \
         break; \
     }
 
@@ -706,6 +712,7 @@ static long long solve_multi_gpu(int n, int gpu_num, int block_size, int K, int 
     }
 
     std::vector<std::vector<long long>> g_res(gpu_num);
+    int had_error = 0;
     gettimeofday(&t0, NULL);
 #pragma omp parallel num_threads(std::min(gpu_num, num_blocks))
     {
@@ -723,9 +730,6 @@ static long long solve_multi_gpu(int n, int gpu_num, int block_size, int K, int 
         cudaMalloc(&d_const, my_cnt * sizeof(Constellation4));
         cudaMalloc(&d_jkl, g_jkl[g].size() * sizeof(uint32_t));
         cudaMalloc(&d_results, my_cnt * sizeof(long long));
-        cudaMemcpy(d_const, g_const[g].data(), my_cnt * sizeof(Constellation4), cudaMemcpyHostToDevice);
-        cudaMemcpy(d_jkl, g_jkl[g].data(), g_jkl[g].size() * sizeof(uint32_t), cudaMemcpyHostToDevice);
-        cudaMemset(d_results, 0, my_cnt * sizeof(long long));
 
         int slice = 16384;
         { const char *e = getenv("NQ_SLICE"); if (e) slice = atoi(e); if (slice < 2) slice = 2; }
@@ -736,27 +740,44 @@ static long long solve_multi_gpu(int n, int gpu_num, int block_size, int K, int 
         cudaMalloc(&d_ckpt, (size_t)my_cnt * maxd * sizeof(int4));
         cudaMalloc(&d_ctop, (size_t)my_cnt * sizeof(int));
         cudaMalloc(&d_csol, (size_t)my_cnt * sizeof(long long));
-        cudaMalloc(&d_queue, (size_t)num_blocks * (2 * block_size * K + 4) * sizeof(int));
-        cudaMemset(d_ctop, 0, (size_t)my_cnt * sizeof(int));
+        cudaMalloc(&d_queue, (size_t)num_blocks * (2 * block_size * K + 8) * sizeof(int));
 
-        size_t smem_reload = (size_t)(block_size / 32) * (maxd + 1) * 32 * sizeof(int4);
-    { const char *e = getenv("NQ_SMEM_PAD"); if (e) smem_reload += atoi(e); }   // 实验：模拟更大 N 的每块 smem   // 宏内变量名对齐（+1 保护槽）
-        switch (n) {
-            LAUNCH_N(6)  LAUNCH_N(7)  LAUNCH_N(8)  LAUNCH_N(9)  LAUNCH_N(10)
-            LAUNCH_N(11) LAUNCH_N(12) LAUNCH_N(13) LAUNCH_N(14) LAUNCH_N(15)
-            LAUNCH_N(16) LAUNCH_N(17) LAUNCH_N(18) LAUNCH_N(19) LAUNCH_N(20)
-            LAUNCH_N(21) LAUNCH_N(22) LAUNCH_N(23) LAUNCH_N(24) LAUNCH_N(25)
-            LAUNCH_N(26) LAUNCH_N(27) LAUNCH_N(28)
-            default:
-                print_with_time("Unsupported N: %d\n", n);
-        }
-        cudaError_t err = cudaDeviceSynchronize();
-        if (err != cudaSuccess) {
-            print_with_time("CUDA kernel error: %s\n", cudaGetErrorString(err));
-        }
+        const bool ok = d_const && d_jkl && d_results && d_ckpt && d_ctop && d_csol && d_queue;
+        if (!ok) {
+            print_with_time("gpu [%d] allocation failed\n", g);
+#pragma omp atomic write
+            had_error = 1;
+            g_res[g].assign(my_cnt, 0);
+        } else {
+            cudaMemcpy(d_const, g_const[g].data(), my_cnt * sizeof(Constellation4), cudaMemcpyHostToDevice);
+            cudaMemcpy(d_jkl, g_jkl[g].data(), g_jkl[g].size() * sizeof(uint32_t), cudaMemcpyHostToDevice);
+            cudaMemset(d_results, 0, my_cnt * sizeof(long long));
+            cudaMemset(d_ctop, 0, (size_t)my_cnt * sizeof(int));
 
-        g_res[g].resize(my_cnt);
-        cudaMemcpy(g_res[g].data(), d_results, my_cnt * sizeof(long long), cudaMemcpyDeviceToHost);
+            size_t smem_reload = (size_t)(block_size / 32) * (maxd + 1) * 32 * sizeof(int4);
+        { const char *e = getenv("NQ_SMEM_PAD"); if (e) smem_reload += atoi(e); }   // 实验：模拟更大 N 的每块 smem   // 宏内变量名对齐（+1 保护槽）
+            cudaError_t launch_err = cudaSuccess;
+            switch (n) {
+                LAUNCH_N(6)  LAUNCH_N(7)  LAUNCH_N(8)  LAUNCH_N(9)  LAUNCH_N(10)
+                LAUNCH_N(11) LAUNCH_N(12) LAUNCH_N(13) LAUNCH_N(14) LAUNCH_N(15)
+                LAUNCH_N(16) LAUNCH_N(17) LAUNCH_N(18) LAUNCH_N(19) LAUNCH_N(20)
+                LAUNCH_N(21) LAUNCH_N(22) LAUNCH_N(23) LAUNCH_N(24) LAUNCH_N(25)
+                LAUNCH_N(26) LAUNCH_N(27) LAUNCH_N(28)
+                default:
+                    print_with_time("Unsupported N: %d\n", n);
+            }
+            cudaError_t err = cudaDeviceSynchronize();
+            if (err == cudaSuccess)
+                err = launch_err;
+            if (err != cudaSuccess) {
+                print_with_time("CUDA kernel error: %s\n", cudaGetErrorString(err));
+#pragma omp atomic write
+                had_error = 1;
+            }
+
+            g_res[g].resize(my_cnt);
+            cudaMemcpy(g_res[g].data(), d_results, my_cnt * sizeof(long long), cudaMemcpyDeviceToHost);
+        }
 
         cudaFree(d_const);
         cudaFree(d_jkl);
@@ -771,6 +792,11 @@ static long long solve_multi_gpu(int n, int gpu_num, int block_size, int K, int 
     }
     gettimeofday(&t1, NULL);
     print_with_time("CUDA kernel time: %.2fms\n", time_diff_ms(t0, t1));
+
+    if (had_error) {
+        print_with_time("CUDA error on at least one GPU; partial sum discarded.\n");
+        return -1;
+    }
 
     // 汇总（与单卡同口径：results × symmetry；伪星座权重 0）
     for (int g = 0; g < gpu_num; g++)
@@ -986,6 +1012,8 @@ long long cuda_solve(int n, int preset_queens) {
     cudaGetDeviceCount(&gpu_num);
     if (gpu_num > 1) {
         long long sum = solve_multi_gpu(n, gpu_num, block_size, K, num_blocks, maxd, const_data, *work_jkl);
+        if (sum < 0)
+            return -1;                 // 出错时不得写 .done
         write_chunk_out(sum);
         return sum;
     }
@@ -1012,7 +1040,7 @@ long long cuda_solve(int n, int preset_queens) {
     cudaMalloc(&d_ckpt, (size_t)cnt * maxd * sizeof(int4));
     cudaMalloc(&d_ctop, (size_t)cnt * sizeof(int));
     cudaMalloc(&d_csol, (size_t)cnt * sizeof(long long));
-    cudaMalloc(&d_queue, (size_t)num_blocks * (2 * block_size * K + 4) * sizeof(int));
+    cudaMalloc(&d_queue, (size_t)num_blocks * (2 * block_size * K + 8) * sizeof(int));
     cudaMemset(d_ctop, 0, (size_t)cnt * sizeof(int));
     print_with_time("checkpoint buffers: %.0f MB (slice=%d)\n",
                     ((double)cnt * maxd * 16 + (double)cnt * 12) / 1048576.0, slice);
@@ -1025,6 +1053,7 @@ long long cuda_solve(int n, int preset_queens) {
 
     // Step 6: 启动GPU内核
     gettimeofday(&t0, NULL);
+    cudaError_t launch_err = cudaSuccess;
     switch (n) {
         LAUNCH_N(6)  LAUNCH_N(7)  LAUNCH_N(8)  LAUNCH_N(9)  LAUNCH_N(10)
         LAUNCH_N(11) LAUNCH_N(12) LAUNCH_N(13) LAUNCH_N(14) LAUNCH_N(15)
@@ -1039,10 +1068,22 @@ long long cuda_solve(int n, int preset_queens) {
     }
     cudaError_t err = cudaDeviceSynchronize();
     gettimeofday(&t1, NULL);
+    if (err == cudaSuccess)
+        err = launch_err;
     if (err != cudaSuccess) {
         print_with_time("CUDA kernel error: %s\n", cudaGetErrorString(err));
     }
     print_with_time("CUDA kernel time: %.2fms\n", time_diff_ms(t0, t1));
+    if (err != cudaSuccess) {   // 不能让调用方把部分/损坏结果写成 .done
+        cudaFree(d_const);
+        cudaFree(d_jkl);
+        cudaFree(d_results);
+        cudaFree(d_ckpt);
+        cudaFree(d_ctop);
+        cudaFree(d_csol);
+        cudaFree(d_queue);
+        return -1;
+    }
 
     // Step 7: 拷回结果
     std::vector<long long> results(cnt);

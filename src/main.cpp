@@ -48,5 +48,5 @@ int main(int argc, char *argv[]) {
                     N, sum, time_diff_ms(start, end));
     print_with_time("===============================================================\n");
 
-    return 0;
+    return sum < 0 ? 1 : 0;
 }
