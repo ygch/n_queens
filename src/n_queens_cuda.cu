@@ -835,6 +835,7 @@ long long cuda_solve(int n, int preset_queens) {
     gettimeofday(&t0, NULL);
 
     // Step 1: CPU端生成所有星座子问题
+    print_with_time("build: span-split v1 (64-bit queue counters)\n");
     auto constellations = generate_constellations(n, preset_queens);
     gettimeofday(&t1, NULL);
     print_with_time("Constellation generation: %.2fms, %zu subproblems\n",
@@ -932,22 +933,26 @@ long long cuda_solve(int n, int preset_queens) {
         jkl_queens_arr[blk * n + l] = ~1u;
     }
 
-    // ---- Optional work split: interleaved parts x sub-chunks ----
+    // ---- Optional work split: interleaved parts x contiguous sub-ranges ----
     // NQ_PARTS/NQ_PART select blocks with blk % parts == part (balances jkl
-    // groups); NQ_CHUNKS/NQ_CHUNK split that part's block list into contiguous
-    // sub-chunks. Defaults (1/0, 1/0) leave the production behaviour unchanged.
-    int parts = 1, part = 0, chunks = 1, chunk = 0;
-    { const char *e = getenv("NQ_PARTS");  if (e) parts  = atoi(e); }
-    { const char *e = getenv("NQ_PART");   if (e) part   = atoi(e); }
-    { const char *e = getenv("NQ_CHUNKS"); if (e) chunks = atoi(e); }
-    { const char *e = getenv("NQ_CHUNK");  if (e) chunk  = atoi(e); }
+    // groups); NQ_CHUNKS/NQ_CHUNK select a contiguous range of that part's
+    // block list, NQ_CHUNK_SPAN (default 1) makes one job cover several
+    // consecutive chunks (fewer, larger jobs amortize the heavy-block tail).
+    int parts = 1, part = 0, chunks = 1, chunk = 0, span = 1;
+    { const char *e = getenv("NQ_PARTS");      if (e) parts  = atoi(e); }
+    { const char *e = getenv("NQ_PART");       if (e) part   = atoi(e); }
+    { const char *e = getenv("NQ_CHUNKS");     if (e) chunks = atoi(e); }
+    { const char *e = getenv("NQ_CHUNK");      if (e) chunk  = atoi(e); }
+    { const char *e = getenv("NQ_CHUNK_SPAN"); if (e) span   = atoi(e); }
     if (parts < 1) parts = 1;
     if (chunks < 1) chunks = 1;
+    if (span < 1) span = 1;
     if (part < 0 || part >= parts || chunk < 0 || chunk >= chunks) {
         print_with_time("invalid NQ_PART/NQ_CHUNK: part %d/%d chunk %d/%d\n",
                         part, parts, chunk, chunks);
         return -1;
     }
+    if (span > chunks - chunk) span = chunks - chunk;
     std::vector<Constellation> sel_consts;
     std::vector<uint32_t> sel_jkl;
     const std::vector<Constellation> *work_consts = &constellations;
@@ -959,12 +964,13 @@ long long cuda_solve(int n, int preset_queens) {
             if (blk % parts == part) part_blocks.push_back(blk);
         const int nb_part = (int)part_blocks.size();
         int cstart = (int)((long long)chunk * nb_part / chunks);
-        int cend   = (int)((long long)(chunk + 1) * nb_part / chunks);
+        int cend   = (int)((long long)(chunk + span) * nb_part / chunks);
         if (cstart > nb_part) cstart = nb_part;
         if (cend > nb_part) cend = nb_part;
         const int nb_sel = cend - cstart;
         if (nb_sel <= 0) {
-            print_with_time("part %d/%d chunk %d/%d: empty\n", part, parts, chunk, chunks);
+            print_with_time("part %d/%d chunk %d-%d/%d: empty\n",
+                            part, parts, chunk, chunk + span - 1, chunks);
             return 0;
         }
         const int per_block = block_size * K;
@@ -981,8 +987,8 @@ long long cuda_solve(int n, int preset_queens) {
         num_blocks = nb_sel;
         work_consts = &sel_consts;
         work_jkl = &sel_jkl;
-        print_with_time("work split: part %d/%d chunk %d/%d -> %d blocks, %lld constellations\n",
-                        part, parts, chunk, chunks, num_blocks, cnt);
+        print_with_time("work split: part %d/%d chunk %d-%d/%d -> %d blocks, %lld constellations\n",
+                        part, parts, chunk, chunk + span - 1, chunks, num_blocks, cnt);
     }
 
     // Step 3.6: 回载内核的精确栈深。

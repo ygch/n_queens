@@ -36,4 +36,5 @@ void print_with_time(const char *format, ...) {
     va_start(args, format);
     vfprintf(stdout, format, args);
     va_end(args);
+    fflush(stdout);   // 长任务运行期间日志要立即可见（run/watch 脚本依赖时间戳）
 }
