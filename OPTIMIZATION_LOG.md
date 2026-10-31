@@ -1266,3 +1266,13 @@ Two equivalent rewrites remove two address/control instructions from the hot bod
 - Requested follow-up to #73: force `left = (left|p) << 1` to `SHF` (ALU). Three source forms were tried: inline `shl.b32`, `lt + lt`, and the earlier wrapper variant. **All three produced hot-loop SASS byte-identical to #73** — ptxas canonicalizes `<<1` to `IMAD.SHL.U32` regardless of the source form (the #72-era "variant D" test was therefore invalid: it was the same binary as #73). Inline `add.s32` for `start+top` and `sub.s32` for `residual-p` likewise changed nothing (still `IMAD.IADD`).
 - The only op that can actually be moved off the multiplier pipe is `residual -= p` → `residual ^= p` (equivalent, p is a single set bit), which becomes `LOP3` on the ALU with the same instruction count. Measured: N=21 neutral (8196.5 vs 8195.8 ms, excluding one cold-start outlier), N=22 symmetric order base/X/X/base = 72,450 / 73,162 / 74,335 / 73,130 ms -> **~1.3% slower**. Rejected.
 - Corollary to the sponge lesson: a source rewrite that leaves SASS unchanged cannot change performance; verify the intended instruction changed before spending timing runs on it.
+
+## Attempt #75: moving the left shift to the ALU pipe with `__funnelshift_l` (2026-10-31, accepted, small)
+
+- #74 had tried inline `shl.b32` and `lt+lt`; ptxas canonicalized both back to `IMAD.SHL`. The **intrinsic** is not canonicalized: `__funnelshift_l(0u, x, 1)` maps to `SHF.L` and returns exactly `x << 1`. Argument-order trap: `__funnelshift_l(x, 0, 1)` returns 0 (this produced a 100x slower, wrong run in the first attempt).
+- SASS (N=20 kernel): total instructions unchanged (928); **IMAD.SHL 17 -> 9** (-8, the 8 unrolled copies), **SHF 40 -> 48** (+8), IMAD 217 -> 209. The op count is identical; only the pipe changes.
+- Measured (counts exact):
+  - N=20, ABBA 8 rounds: 1027.0 -> 1022.6 ms, **-0.43%** (paired t=-2.01, 6/8 rounds faster);
+  - N=22, ABBA 3 rounds: 72,920.7 -> 72,595.8 ms, **-0.45%** (paired t=-4.28).
+- Also tried moving the ret-pack shifts (`nret << N`, `(nret&15)<<N`, `(nret>>4)<<N`) to the intrinsic: IMAD.SHL 17 -> 1 and SHF +22, but **+1.28% at N=20** (t=1.10) - after #73 the ALU pipe is already the busier one; rejected.
+- The change is bit-identical (verified N=20/22). At N=28 the body has one extra IMAD.SHL for the 5-bit ret pack and one extra LOP3 (`right &= last`), so the gain may differ; deploy to the fresh 4x5090 campaign.

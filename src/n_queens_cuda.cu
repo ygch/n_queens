@@ -203,7 +203,7 @@ n_queens_kernel(
                     const bool exhausted = (residual == 0);
 
                     unsigned int cur = cur0 | p;
-                    left = (left | p) << 1;
+                    left = __funnelshift_l(0u, left | p, 1);   // IMAD.SHL -> SHF (ALU pipe), see #75
                     right = (right | p) >> 1;   // == umulhi(x,0x80000000)，SHF 走 ALU 管（乘法管更紧，见 #73）
 
                     unsigned int occ, child;
@@ -253,7 +253,7 @@ n_queens_kernel(
                     const bool exhausted = (residual == 0);
 
                     unsigned int cur = cur0 | p;
-                    left = (left | p) << 1;
+                    left = __funnelshift_l(0u, left | p, 1);   // IMAD.SHL -> SHF (ALU pipe), see #75
                     right = (right | p) >> 1;   // == umulhi(x,0x80000000)，SHF 走 ALU 管（乘法管更紧，见 #73）
 
                     unsigned int occ, child;
@@ -303,7 +303,7 @@ n_queens_kernel(
                     const bool exhausted = (residual == 0);
 
                     unsigned int cur = cur0 | p;
-                    left = (left | p) << 1;
+                    left = __funnelshift_l(0u, left | p, 1);   // IMAD.SHL -> SHF (ALU pipe), see #75
                     right = (right | p) >> 1;   // == umulhi(x,0x80000000)，SHF 走 ALU 管（乘法管更紧，见 #73）
 
                     unsigned int occ, child;
@@ -353,7 +353,7 @@ n_queens_kernel(
                     const bool exhausted = (residual == 0);
 
                     unsigned int cur = cur0 | p;
-                    left = (left | p) << 1;
+                    left = __funnelshift_l(0u, left | p, 1);   // IMAD.SHL -> SHF (ALU pipe), see #75
                     right = (right | p) >> 1;   // == umulhi(x,0x80000000)，SHF 走 ALU 管（乘法管更紧，见 #73）
 
                     unsigned int occ, child;
@@ -403,7 +403,7 @@ n_queens_kernel(
                     const bool exhausted = (residual == 0);
 
                     unsigned int cur = cur0 | p;
-                    left = (left | p) << 1;
+                    left = __funnelshift_l(0u, left | p, 1);   // IMAD.SHL -> SHF (ALU pipe), see #75
                     right = (right | p) >> 1;   // == umulhi(x,0x80000000)，SHF 走 ALU 管（乘法管更紧，见 #73）
 
                     unsigned int occ, child;
@@ -453,7 +453,7 @@ n_queens_kernel(
                     const bool exhausted = (residual == 0);
 
                     unsigned int cur = cur0 | p;
-                    left = (left | p) << 1;
+                    left = __funnelshift_l(0u, left | p, 1);   // IMAD.SHL -> SHF (ALU pipe), see #75
                     right = (right | p) >> 1;   // == umulhi(x,0x80000000)，SHF 走 ALU 管（乘法管更紧，见 #73）
 
                     unsigned int occ, child;
@@ -503,7 +503,7 @@ n_queens_kernel(
                     const bool exhausted = (residual == 0);
 
                     unsigned int cur = cur0 | p;
-                    left = (left | p) << 1;
+                    left = __funnelshift_l(0u, left | p, 1);   // IMAD.SHL -> SHF (ALU pipe), see #75
                     right = (right | p) >> 1;   // == umulhi(x,0x80000000)，SHF 走 ALU 管（乘法管更紧，见 #73）
 
                     unsigned int occ, child;
@@ -553,7 +553,7 @@ n_queens_kernel(
                     const bool exhausted = (residual == 0);
 
                     unsigned int cur = cur0 | p;
-                    left = (left | p) << 1;
+                    left = __funnelshift_l(0u, left | p, 1);   // IMAD.SHL -> SHF (ALU pipe), see #75
                     right = (right | p) >> 1;   // == umulhi(x,0x80000000)，SHF 走 ALU 管（乘法管更紧，见 #73）
 
                     unsigned int occ, child;
